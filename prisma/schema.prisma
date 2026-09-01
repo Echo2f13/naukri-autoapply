@@ -1,0 +1,37 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model AppliedJob {
+  id                 String   @id @default(uuid())
+  company            String
+  role               String
+  location           String?
+  jobUrl             String   @unique
+  appliedAt          DateTime @default(now())
+  status             String   @default("PENDING") // PENDING, SUCCESS, FAILED, SKIPPED
+  recruiterQuestions Json?    // Array of questions found
+  aiAnswers          Json?    // Array of answers submitted
+  errorMessage       String?
+  matchScore         Int?
+  externalUrl        String?  // URL for manual external application
+  
+  @@index([jobUrl])
+  @@index([appliedAt])
+}
+
+model JobLog {
+  id        String   @id @default(uuid())
+  event     String   // LOGIN, SEARCH, APPLY, ERROR, CAPTCHA
+  timestamp DateTime @default(now())
+  metadata  Json?    // Extra info like jobUrl, error details, etc.
+  
+  @@index([timestamp])
+}
