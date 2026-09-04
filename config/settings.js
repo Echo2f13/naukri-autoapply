@@ -9,7 +9,9 @@ const settings = {
   lmStudioModel: process.env.LMSTUDIO_MODEL || 'gemma-4-e4b',
   // Ollama local AI settings
   ollamaBaseUrl: process.env.OLLAMA_BASE_URL || 'http://localhost:11434',
+  ollamaModel: process.env.OLLAMA_MODEL || null, // null = auto-detect from server
   resumePath: path.resolve(process.env.RESUME_PATH || './YOUR_RESUME.pdf'),
+  browserChannel: process.env.BROWSER_CHANNEL || 'msedge',
   maxDailyApplications: parseInt(process.env.MAX_DAILY_APPLICATIONS || '30', 10),
   headless: process.env.HEADLESS === 'true',
   slowMo: parseInt(process.env.BROWSER_SLOW_MO || '0', 10),

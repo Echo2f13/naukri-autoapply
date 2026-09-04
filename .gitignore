@@ -1,5 +1,10 @@
 node_modules
 # Keep environment variables out of version control
+.env
+auth/
+screenshots/
+YOUR_RESUME.pdf
+resume/*.pdf
 
 
 /generated/prisma

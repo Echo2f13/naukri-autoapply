@@ -12,6 +12,7 @@ async function launchBrowser() {
     }
 
     const context = await chromium.launchPersistentContext(settings.authDir, {
+        channel: settings.browserChannel,
         headless: settings.headless,
         slowMo: settings.slowMo,
         viewport: null, // Set to null to allow --start-maximized to work

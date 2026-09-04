@@ -21,14 +21,30 @@ async function checkOllama() {
 
         if (models.length === 0) {
             console.log(chalk.yellow(`[Ollama]   ⚠️  Connected but no models loaded.`));
-            console.log(chalk.yellow(`[Ollama]   → Run: ollama pull gemma3:4b`));
+            console.log(chalk.yellow(`[Ollama]   → Run: ollama pull qwen2.5:7b`));
             ollamaOnline = false;
             return false;
         }
 
-        // Prefer gemma, qwen, llama, mistral in that order
+        // If a model is pinned in .env (OLLAMA_MODEL), use it — verify it's actually available.
+        // Falls back to preference-order auto-detection if pinned model isn't loaded.
+        const pinnedModel = settings.ollamaModel;
+        if (pinnedModel) {
+            const found = models.find(m => m.name === pinnedModel || m.name.startsWith(pinnedModel));
+            if (found) {
+                activeModel = found.name;
+                console.log(chalk.green(`[Ollama]   ✅ Connected! Using pinned model: ${chalk.bold(activeModel)}`));
+                ollamaOnline = true;
+                return true;
+            } else {
+                console.log(chalk.yellow(`[Ollama]   ⚠️  Pinned model "${pinnedModel}" not found. Available: ${models.map(m => m.name).join(', ')}`));
+                console.log(chalk.yellow(`[Ollama]   → Falling back to auto-detection.`));
+            }
+        }
+
+        // Prefer qwen2.5 (general), then other known-good families
         const preferred = models.find(m =>
-            ['gemma', 'qwen', 'llama', 'mistral', 'phi'].some(k =>
+            ['qwen2.5', 'gemma', 'qwen', 'llama', 'mistral', 'phi'].some(k =>
                 m.name.toLowerCase().includes(k)
             )
         ) || models[0];

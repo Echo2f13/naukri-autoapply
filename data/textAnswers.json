@@ -34,5 +34,8 @@
   "pg cgpa (if any)": "7.7",
   "skill set": "Python, Java, JavaScript, C#, SQL, Django, Node.js, React, AWS, Azure, Docker, Kubernetes",
   "year of passing": "2024",
-  "history of arrears (or backlogs)": "None"
+  "history of arrears (or backlogs)": "None",
+  "do you have hands-on experience with claude and the emergent platform?": "No",
+  "do you have any experience working with ai/generative ai technologies?": "No",
+  "could you briefly explain the ai projects or applications you have built?": "No experience"
 }
