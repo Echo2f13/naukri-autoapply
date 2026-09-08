@@ -15,7 +15,7 @@ async function launchBrowser() {
         channel: settings.browserChannel,
         headless: settings.headless,
         slowMo: settings.slowMo,
-        viewport: null, // Set to null to allow --start-maximized to work
+        viewport: null, recordVideo: { dir: 'videos' }, // Set to null to allow --start-maximized to work
         args: [
             '--disable-blink-features=AutomationControlled',
             '--no-sandbox',
