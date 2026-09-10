@@ -1,5 +1,7 @@
 const { getAnswer, promptUser, findLearnedAnswer } = require('../ai/answerEngine');
 const { randomDelay } = require('./utils');
+const { selectResumeForJob } = require('./resumeSelector');
+const profile = require('../config/profile');
 const path = require('path');
 const fs = require('fs');
 const chalk = require('chalk');
@@ -52,12 +54,32 @@ async function findAuthInput(page, labelRegex, typeSelector, automationId) {
 /**
  * Specialized handler for Workday (external) applications.
  */
-async function handleWorkdayApplication(page, jobUrl) {
+async function handleWorkdayApplication(page, jobUrl, jobOrResume = null, options = {}) {
+    const dryRun = options.dryRun || false;
     console.log(chalk.magenta.bold(`\n--- ENTERING WORKDAY AUTOMATION ---`));
 
     const USER_EMAIL = process.env.WORKDAY_USERNAME || 'YOUR_WORKDAY_USERNAME'; // Replace with your actual Workday username or use environment variables for security
     const USER_PWD = process.env.WORKDAY_PASSWORD || 'YOUR_WORKDAY_PASSWORD'; // Replace with your actual password or use environment variables for security
-    const RESUME_PATH = path.resolve(process.cwd(), 'YOUR_RESUME.pdf');
+
+    // Resolve resume using project's real resume-selection system
+    let selectedResume = null;
+    if (jobOrResume && typeof jobOrResume === 'object' && jobOrResume.path && fs.existsSync(jobOrResume.path)) {
+        selectedResume = jobOrResume;
+    } else if (jobOrResume && typeof jobOrResume === 'object') {
+        selectedResume = selectResumeForJob(jobOrResume);
+    } else {
+        selectedResume = selectResumeForJob({});
+    }
+
+    const RESUME_PATH = selectedResume && selectedResume.path && fs.existsSync(selectedResume.path)
+        ? selectedResume.path
+        : null;
+
+    if (!RESUME_PATH) {
+        console.log(chalk.yellow('  ⚠️ Workday warning: No valid resume PDF found on disk.'));
+    } else {
+        console.log(chalk.gray(`  [Workday] Using verified resume: "${path.basename(RESUME_PATH)}"`));
+    }
 
     try {
         // Check if the page is missing or job doesn't exist
@@ -346,7 +368,7 @@ async function handleWorkdayApplication(page, jobUrl) {
                 
                 if (isResume) {
                     const alreadyUploaded = await page.locator('[data-automation-id="file-upload-item-name"], [data-automation-id="file-upload-item"]').first().isVisible().catch(() => false);
-                    if (!alreadyUploaded) {
+                    if (!alreadyUploaded && RESUME_PATH) {
                         console.log(chalk.green(`    -> Uploading Resume: ${path.basename(RESUME_PATH)}`));
                         await fileInput.setInputFiles(RESUME_PATH);
                         await randomDelay(6000, 10000);
@@ -368,6 +390,17 @@ async function handleWorkdayApplication(page, jobUrl) {
 
             if (await nextBtn.isVisible()) {
                 const btnText = (await nextBtn.innerText()).trim();
+                const isFinalSubmit = /submit/i.test(btnText) || sectionHeader.toLowerCase().includes('review');
+
+                if (dryRun && isFinalSubmit) {
+                    console.log(chalk.bold.yellow(`  🛡️  [SAFETY BARRIER] Workday final "${btnText}" button reached in section "${sectionHeader}". Stopped in Dry-Run.`));
+                    return {
+                        status: 'DRY_RUN_READY_TO_SUBMIT',
+                        message: `[DRY-RUN] Workday form completed up to final "${btnText}" step without submitting`,
+                        resumeUsed: RESUME_PATH ? path.basename(RESUME_PATH) : undefined
+                    };
+                }
+
                 console.log(chalk.yellow(`  Clicking "${btnText}"...`));
                 await nextBtn.click();
                 await randomDelay(6000, 10000);
@@ -381,6 +414,17 @@ async function handleWorkdayApplication(page, jobUrl) {
                 await randomDelay(3000, 5000);
                 if (await nextBtn.isVisible()) {
                     const btnText = (await nextBtn.innerText()).trim();
+                    const isFinalSubmit = /submit/i.test(btnText) || sectionHeader.toLowerCase().includes('review');
+
+                    if (dryRun && isFinalSubmit) {
+                        console.log(chalk.bold.yellow(`  🛡️  [SAFETY BARRIER] Workday final "${btnText}" button reached in section "${sectionHeader}". Stopped in Dry-Run.`));
+                        return {
+                            status: 'DRY_RUN_READY_TO_SUBMIT',
+                            message: `[DRY-RUN] Workday form completed up to final "${btnText}" step without submitting`,
+                            resumeUsed: RESUME_PATH ? path.basename(RESUME_PATH) : undefined
+                        };
+                    }
+
                     console.log(chalk.yellow(`  Clicking "${btnText}"...`));
                     await nextBtn.click();
                     await randomDelay(6000, 10000);
@@ -392,6 +436,9 @@ async function handleWorkdayApplication(page, jobUrl) {
             }
         }
 
+        if (dryRun) {
+            return { status: 'DRY_RUN_READY_TO_SUBMIT', message: 'Workday automation reached review/submit boundary in Dry-Run.', resumeUsed: RESUME_PATH ? path.basename(RESUME_PATH) : undefined };
+        }
         return { status: 'SUCCESS', message: 'Workday automation reached end of detected forms.' };
 
     } catch (err) {
@@ -420,14 +467,14 @@ async function getErrorText(page) {
 
 async function fillWorkdayForm(page) {
 
-    // ── Personal / address constants ───────────────────────────────────────────
-    const FULL_NAME      = 'Panasa Rohanth Kumar';
-    const FAMILY_NAME    = 'Panasa';
-    const GIVEN_NAME     = 'Rohanth Kumar';
-    const ADDR_LINE_1    = 'Hno 5, Geetha Nagar, Old Safilguda';
-    const CITY           = 'Hyderabad';
-    const POSTAL_CODE    = '500056';
-    const PHONE_NUMBER   = '7993860263';
+    // ── Personal / address constants (derived dynamically from profile.json) ───
+    const FULL_NAME      = profile.fullName || '';
+    const FAMILY_NAME    = profile.lastName || '';
+    const GIVEN_NAME     = profile.firstName || '';
+    const ADDR_LINE_1    = profile.address?.street || '';
+    const CITY           = profile.address?.city || profile.currentLocation || '';
+    const POSTAL_CODE    = profile.address?.zipCode || profile.postalCode || '';
+    const PHONE_NUMBER   = (profile.mobile || '').replace(/^\+91\s*/, '');
 
     // ── Helper: is this field required (red *)? ────────────────────────────────
     async function isFieldRequired(container) {

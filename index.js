@@ -167,8 +167,8 @@ async function promptStartup() {
 
 // ─── Core Automation ──────────────────────────────────────────────────────────
 
-async function runAutomation(config) {
-    const { mode, searchOptions, maxDays } = config;
+async function runAutomation(config = {}) {
+    const { mode = 'recommended', searchOptions = null, maxDays = 1 } = config || {};
 
     console.log(chalk.blue.bold('\n--- Starting Naukri Auto Apply ---'));
     await logEvent('START_AUTOMATION', { mode, ...(searchOptions || {}), maxDays });
@@ -281,6 +281,10 @@ async function runAutomation(config) {
 // ─── Entry Point ──────────────────────────────────────────────────────────────
 
 async function startup() {
+    const { validateProfileSetup } = require('./config/profileLoader');
+    if (!validateProfileSetup()) {
+        process.exit(1);
+    }
     const config = await promptStartup();
     await runAutomation(config);
 }

@@ -1,10 +1,46 @@
-node_modules
-# Keep environment variables out of version control
+# Node dependencies
+node_modules/
+
+# Environment and Secrets (Strictly Local)
 .env
-auth/
-screenshots/
-YOUR_RESUME.pdf
+.env.*
+!.env.example
+
+# Candidate Profile (Local Only - Never Track PII)
+config/profile.json
+!config/profile.example.json
+
+# Personal Candidate Answer Databases & Caches
+data/*.json
+!data/*.example.json
+
+# Candidate Resumes
 resume/*.pdf
+resume/*.docx
+resume/*.doc
+YOUR_RESUME.pdf
+!resume/README.md
 
+# Browser Profiles, Storage State, and Auth Sessions
+/auth/
+storage/
+cookies/
+sessions/
+*.session
 
-/generated/prisma
+# Local Artifacts, Videos, Screenshots & Logs
+/screenshots/
+screenshots/
+/videos/
+/scratch/
+*.log
+*.traineddata
+eng.traineddata
+
+# Database and Generated Files
+.data/
+/generated/prisma/
+
+# OS and Editor Files
+.DS_Store
+Thumbs.db

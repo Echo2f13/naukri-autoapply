@@ -1,0 +1,142 @@
+'use strict';
+
+const chalk = require('chalk');
+const { routeAndApply } = require('./router');
+const { isJobAlreadyApplied, recordApplicationResult } = require('../db/repository');
+const { randomDelay } = require('../automation/utils');
+const settings = require('../config/settings');
+
+/**
+ * Universal Application Coordinator.
+ * Sequentially executes applications across any ATS or source platform,
+ * enforcing rate limits, score thresholds, and persistence logging.
+ */
+class ApplicationCoordinator {
+    /**
+     * @param {Object} options
+     * @param {import('playwright').Page} options.page
+     * @param {import('playwright').BrowserContext} [options.context]
+     */
+    constructor({ page, context } = {}) {
+        this.page = page;
+        this.context = context;
+    }
+
+    /**
+     * Set active page
+     * @param {import('playwright').Page} page 
+     * @param {import('playwright').BrowserContext} [context] 
+     */
+    setPage(page, context) {
+        this.page = page;
+        this.context = context;
+    }
+
+    /**
+     * Executes applications for a batch of ranked jobs.
+     * 
+     * @param {Array<{ job: import('../discovery/normalizedJob').NormalizedJob, score: number, decision: string }>} rankedJobs
+     * @param {Object} [options]
+     * @param {number} [options.maxApply]
+     * @param {number} [options.minScore=50]
+     * @param {boolean} [options.dryRun=false]
+     * @returns {Promise<{ applied: number, succeeded: number, failed: number, skipped: number, results: any[] }>}
+     */
+    async processApplications(rankedJobs = [], options = {}) {
+        const maxApply = options.maxApply || settings.maxApplicationsPerRun || 10;
+        const minScore = options.minScore !== undefined ? options.minScore : 50;
+        const dryRun = !!options.dryRun;
+
+        console.log(chalk.bold.magenta(`\n============================================================`));
+        console.log(chalk.bold.magenta(`  APPLICATION COORDINATOR: Starting Batch Run`));
+        console.log(chalk.magenta(`  Max Limit: ${maxApply} | Min Score: ${minScore} | Dry Run: ${dryRun}`));
+        console.log(chalk.bold.magenta(`============================================================\n`));
+
+        let appliedCount = 0;
+        const stats = {
+            totalAttempted: 0,
+            succeeded: 0,
+            dryRunReady: 0,
+            failed: 0,
+            skipped: 0,
+            results: []
+        };
+
+        for (const item of rankedJobs) {
+            if (appliedCount >= maxApply) {
+                console.log(chalk.yellow(`\n[Application Coordinator] Reached max applications limit (${maxApply}). Stopping batch.`));
+                break;
+            }
+
+            const { job, score, decision } = item;
+
+            // Check match score
+            if (score < minScore || decision === 'SKIP') {
+                console.log(chalk.gray(`[Skip Score] "${job.title}" at "${job.company}" (Score: ${score} < ${minScore})`));
+                stats.skipped++;
+                continue;
+            }
+
+            // Fresh database check
+            const alreadyApplied = await isJobAlreadyApplied(job);
+            if (alreadyApplied) {
+                console.log(chalk.gray(`[Already Applied] "${job.title}" at "${job.company}". Skipping.`));
+                stats.skipped++;
+                continue;
+            }
+
+            console.log(chalk.bold.cyan(`\n>>> [${appliedCount + 1}/${maxApply}] Applying: "${job.title}" at "${job.company}" (Score: ${score}/100, Source: ${job.source})`));
+
+            stats.totalAttempted++;
+            try {
+                if (dryRun) {
+                    console.log(chalk.yellow(`  [Dry Run Defense-In-Depth] Exercising form application up to submission boundary: ${job.applicationUrl || job.sourceUrl}`));
+                }
+
+                const result = await routeAndApply(this.page, job, { context: this.context, dryRun });
+                result.matchScore = score;
+
+                // Record result to database only if NOT in dryRun mode
+                if (!dryRun && result.status !== 'DRY_RUN_READY_TO_SUBMIT') {
+                    await recordApplicationResult(job, result);
+                }
+
+                if (result.status === 'SUCCESS') {
+                    stats.succeeded++;
+                    appliedCount++;
+                } else if (result.status === 'DRY_RUN_READY_TO_SUBMIT') {
+                    console.log(chalk.green(`  🛡️ [Dry Run Safe Barrier] Reached submission boundary for "${job.title}". Final submit was prevented.`));
+                    stats.dryRunReady++;
+                    appliedCount++;
+                } else if (result.status === 'SKIPPED') {
+                    stats.skipped++;
+                } else {
+                    stats.failed++;
+                }
+
+                stats.results.push({ job, result });
+
+            } catch (err) {
+                console.error(chalk.red(`  ❌ Error applying to "${job.title}": ${err.message}`));
+                if (!dryRun) {
+                    await recordApplicationResult(job, { status: 'FAILED', message: err.message, matchScore: score });
+                }
+                stats.failed++;
+                stats.results.push({ job, result: { status: 'FAILED', message: err.message } });
+            }
+
+            // Human delay between applications
+            const delay = Math.floor(Math.random() * (settings.maxDelay - settings.minDelay + 1)) + settings.minDelay;
+            console.log(chalk.gray(`  Pausing ${(delay / 1000).toFixed(1)}s before next application...`));
+            await randomDelay(settings.minDelay, settings.maxDelay);
+        }
+
+        console.log(chalk.bold.green(`\n============================================================`));
+        console.log(chalk.bold.green(`  BATCH COMPLETE: ${stats.succeeded} Succeeded | ${stats.dryRunReady} Dry-Run Ready | ${stats.failed} Failed | ${stats.skipped} Skipped`));
+        console.log(chalk.bold.green(`============================================================\n`));
+
+        return stats;
+    }
+}
+
+module.exports = { ApplicationCoordinator };

@@ -6,14 +6,17 @@ const fs = require('fs');
  * Launches a persistent browser context for session management.
  * @returns {Promise<Object>} { context, page }
  */
-async function launchBrowser() {
+async function launchBrowser(options = {}) {
     if (!fs.existsSync(settings.authDir)) {
         fs.mkdirSync(settings.authDir, { recursive: true });
     }
 
+    const isHeadless = options.headless !== undefined ? options.headless : settings.headless;
+    const channel = options.channel || settings.browserChannel;
+
     const context = await chromium.launchPersistentContext(settings.authDir, {
-        channel: settings.browserChannel,
-        headless: settings.headless,
+        channel,
+        headless: isHeadless,
         slowMo: settings.slowMo,
         viewport: null, recordVideo: { dir: 'videos' }, // Set to null to allow --start-maximized to work
         args: [
@@ -33,7 +36,7 @@ async function launchBrowser() {
     const pages = context.pages();
     const page = pages.length > 0 ? pages[0] : await context.newPage();
     
-    return { context, page };
+    return { context, page, browser: context };
 }
 
 module.exports = { launchBrowser };

@@ -9,6 +9,7 @@ datasource db {
   provider = "postgresql"
 }
 
+// ─── Legacy Models (Preserved for 100% Backward Compatibility) ────────────────
 model AppliedJob {
   id                 String   @id @default(uuid())
   company            String
@@ -34,4 +35,87 @@ model JobLog {
   metadata  Json?    // Extra info like jobUrl, error details, etc.
   
   @@index([timestamp])
+}
+
+// ─── Multi-Source Enterprise Automation Models ────────────────────────────────
+
+enum PlatformSource {
+  NAUKRI
+  LINKEDIN
+  WELLFOUND
+  WHATSAPP
+}
+
+enum ApplicationStatus {
+  DISCOVERED
+  ELIGIBLE
+  INELIGIBLE
+  PENDING
+  SUCCESS
+  FAILED
+  SKIPPED
+}
+
+model Job {
+  id              String         @id @default(uuid())
+  fingerprint     String         @unique
+  source          PlatformSource @default(NAUKRI)
+  sourceJobId     String?
+  sourceUrl       String
+  applicationUrl  String
+  applicationType String         @default("UNKNOWN") // NATIVE, EXTERNAL_ATS, DIRECT_URL, UNKNOWN
+  title           String
+  company         String
+  locations       String[]
+  isRemote        Boolean        @default(false)
+  minExperience   Int            @default(0)
+  maxExperience   Int            @default(30)
+  skills          String[]
+  description     String?
+  postedAge       String?
+  discoveredAt    DateTime       @default(now())
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  applications    Application[]
+
+  @@index([source])
+  @@index([company])
+  @@index([title])
+  @@index([discoveredAt])
+}
+
+model Application {
+  id             String            @id @default(uuid())
+  jobId          String
+  job            Job               @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  status         ApplicationStatus @default(PENDING)
+  appliedAt      DateTime?
+  resumeUsed     String?
+  matchScore     Int?
+  failureReason  String?
+  notes          String?
+  qaSnapshot     Json?
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+
+  attempts       ApplicationAttempt[]
+
+  @@index([jobId])
+  @@index([status])
+  @@index([appliedAt])
+}
+
+model ApplicationAttempt {
+  id            String      @id @default(uuid())
+  applicationId String
+  application   Application @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  attemptNumber Int         @default(1)
+  status        String      // SUCCESS, FAILED, SKIPPED
+  message       String?
+  errorDetails  String?
+  attemptedAt   DateTime    @default(now())
+
+  @@index([applicationId])
+  @@index([attemptedAt])
 }

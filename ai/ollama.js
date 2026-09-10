@@ -68,7 +68,11 @@ async function checkOllama() {
  * @returns {Promise<string|null>}
  */
 async function askOllama(systemPrompt, userMessage) {
-    if (!ollamaOnline || !activeModel) return null;
+    if (!ollamaOnline || !activeModel) {
+        // Auto-initialize connection if not previously verified
+        const ok = await checkOllama();
+        if (!ok || !activeModel) return null;
+    }
 
     const base = settings.ollamaBaseUrl;
 

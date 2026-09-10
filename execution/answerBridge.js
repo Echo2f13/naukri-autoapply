@@ -40,7 +40,7 @@ const {
 // actually calling the full getAnswer() (which has side-effects like saving).
 // We re-expose isExperienceQuestion and checkPersonalFact by importing the
 // module then monkey-patching is not needed — we read profile ourselves.
-const profile = require('../config/profile.json');
+const profile = require('../config/profile');
 
 const PERSONAL_FACT_MATCHERS = [
   { match: ['notice period', 'notice'],            answer: () => profile.noticePeriod },

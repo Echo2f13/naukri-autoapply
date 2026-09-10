@@ -42,6 +42,27 @@ async function saveApplication(jobData) {
                 externalUrl: jobData.externalUrl || null
             }
         });
+
+        // Also sync with new Job & Application entities
+        try {
+            const { recordApplicationResult } = require('./repository');
+            const { createNormalizedJob } = require('../discovery/normalizedJob');
+            const normalized = createNormalizedJob({
+                source: 'NAUKRI',
+                sourceUrl: jobData.jobUrl,
+                applicationUrl: jobData.externalUrl || jobData.jobUrl,
+                title: jobData.role,
+                company: jobData.company,
+                location: jobData.location
+            });
+            await recordApplicationResult(normalized, {
+                status: jobData.status,
+                message: jobData.errorMessage || 'Saved via legacy saveApplication',
+                matchScore: jobData.matchScore,
+                externalUrl: jobData.externalUrl,
+                qa: jobData.questions?.map((q, idx) => ({ question: q, answer: jobData.answers?.[idx] }))
+            });
+        } catch (e) {}
     } catch (error) {
         console.error(`Error saving application to DB: ${error.message}`);
     }

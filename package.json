@@ -4,8 +4,14 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
+    "test": "node test-suite.js",
     "start": "node index.js",
+    "login": "node manual_login.js",
+    "autoapply": "node masterController.js",
+    "autoapply:all": "node masterController.js --sources=naukri,linkedin,wellfound,whatsapp",
+    "autoapply:dry": "node masterController.js --sources=naukri,linkedin,wellfound,whatsapp --dry-run",
+    "scheduler": "node scheduler/cron.js",
+    "whatsapp:watch": "node scripts/whatsappWatch.js",
     "start:api": "node execution/server.js"
   },
   "keywords": [],
@@ -24,6 +30,7 @@
     "pdf-parse": "^2.4.5",
     "pg": "^8.20.0",
     "playwright": "^1.60.0",
-    "prisma": "^7.8.0"
+    "prisma": "^7.8.0",
+    "tesseract.js": "^7.0.0"
   }
 }

@@ -116,8 +116,9 @@ async function handleChatbotOverlay(page, overlay, answered) {
         '.ssrc__radio-btn-container', 
         'label.ssrc__label',          
         'input.ssrc__radio',          
-        '[class*="chip"][class*="clickable"]',
+        '[class*="chip"]',
         'a[role="button"]',
+        'button',
         'label',
         '.styles_chip__7YCfG'
     ];
@@ -129,6 +130,66 @@ async function handleChatbotOverlay(page, overlay, answered) {
             const text = (await opt.innerText()).trim();
             if (text && !text.includes('\n') && !options.includes(text)) options.push(text);
         }
+    }
+
+    // --- Auto-handle Consent / Terms of use / Privacy Policy Checkboxes & Buttons ---
+    let interacted = false;
+    const isConsentQuestion = /terms|privacy|policy|consent|declaration|agree/i.test(questionText || '');
+    
+    const checkboxLocators = [
+        'input[type="checkbox"]',
+        '.ssrc__checkbox',
+        'label.checkbox-wrap',
+        'label:has(input[type="checkbox"])',
+        '[class*="checkbox"]'
+    ];
+    for (const sel of checkboxLocators) {
+        const els = await overlay.locator(sel).all();
+        for (const el of els) {
+            if (await el.isVisible().catch(() => false)) {
+                const inputEl = el.locator('input[type="checkbox"]').first();
+                const count = await inputEl.count().catch(() => 0);
+                const isChecked = count > 0 
+                    ? await inputEl.isChecked().catch(() => false)
+                    : await el.isChecked().catch(() => false);
+                if (!isChecked) {
+                    console.log(chalk.green(`    -> Auto-checking terms/consent checkbox (${sel})`));
+                    await el.click({ force: true }).catch(() => {});
+                    interacted = true;
+                }
+            }
+        }
+    }
+
+    const agreeBtnSelectors = [
+        '*:text-matches("^\\s*Yes\\s*$", "i")',
+        'span:text-is("Yes")',
+        'button:has-text("Yes")',
+        'div:text-is("Yes")',
+        '[class*="chip"]:has-text("Yes")',
+        'button:has-text("I Agree")',
+        'button:has-text("Agree")',
+        'button:has-text("Accept")',
+        'a:has-text("I Agree")',
+        'a:has-text("Agree")',
+        '[class*="agree"]'
+    ];
+    for (const sel of agreeBtnSelectors) {
+        const btn = overlay.locator(sel).first();
+        if (await btn.isVisible().catch(() => false)) {
+            console.log(chalk.green(`    -> Clicking agree/consent button (${sel})`));
+            await btn.evaluate(e => {
+                e.click();
+                e.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+            }).catch(() => {});
+            interacted = true;
+            break;
+        }
+    }
+
+    if (isConsentQuestion && interacted) {
+        answered.push({ question: questionText || "Terms & Consent", answer: 'Yes' });
+        return answered;
     }
 
     const cleanQ = (questionText || "Chatbot Question").toLowerCase().trim();
@@ -155,7 +216,7 @@ async function handleChatbotOverlay(page, overlay, answered) {
     }
 
     answered.push({ question: questionText || "Chatbot Question", answer });
-    let interacted = false;
+    interacted = false;
 
     if (options.length > 0) {
         const selectedAnswers = answer.split(',').map(s => s.toLowerCase().trim()).filter(Boolean);

@@ -1,0 +1,19 @@
+{
+  "are you willing to relocate?": "Yes",
+  "can you able to start immediately?": "Yes",
+  "can you able to commute office on daily basis?": "Yes",
+  "are you currently working?": "No",
+  "can you join immediately?": "Yes",
+  "salutation": "Ms.",
+  "highest educational qualification": "Bachelor's Degree",
+  "are you authorized to work permanently in location in which you are expressing an interest?": "Yes",
+  "would need a work permit to work in location of application?": "No",
+  "did you work on any project yet": "Yes",
+  "which python backend frameworks have you worked on hands-on?": "FastAPI",
+  "have you independently developed rest apis in python?": "Yes",
+  "which databases have you worked on hands-on?": "PostgreSQL",
+  "what is your frontend exposure?": "React / TypeScript",
+  "do you have experience working with git and ci/cd pipelines?": "Yes",
+  "do you have hands-on experience developing production-grade applications using python?": "Yes",
+  "will you now or in the future require sponsorship for employment (e.g. h-1b visa status)?": "No"
+}

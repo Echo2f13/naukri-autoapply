@@ -2,26 +2,27 @@ const fs = require('fs');
 const path = require('path');
 const chalk = require('chalk');
 const settings = require('../config/settings');
-const profile = require('../config/profile.json');
+const profile = require('../config/profile');
 
 // ─── Resume Text Extraction ──────────────────────────────────────────────────
 let resumeText = '';
 
-async function loadResume() {
+async function loadResume(customPath = null) {
     try {
-        if (!fs.existsSync(settings.resumePath)) {
-            console.log(chalk.yellow(`[Prompts] ⚠️  Resume not found at ${settings.resumePath}. Proceeding without it.`));
+        const targetPath = customPath || settings.resumePath;
+        if (!fs.existsSync(targetPath)) {
+            console.log(chalk.yellow(`[Prompts] ⚠️  Resume not found at ${targetPath}. Proceeding without it.`));
             return;
         }
         const { PDFParse } = require('pdf-parse');
-        const dataBuffer = fs.readFileSync(settings.resumePath);
+        const dataBuffer = fs.readFileSync(targetPath);
         const parser = new PDFParse({ data: dataBuffer });
         const pdfData = await parser.getText();
         resumeText = pdfData.text
             .replace(/\s{3,}/g, '  ')   // Collapse excessive whitespace
             .trim()
             .slice(0, 3000);             // Cap at 3000 chars to keep prompts lean
-        console.log(chalk.green(`[LMStudio] 📄 Resume loaded: ${resumeText.length} characters extracted.`));
+        console.log(chalk.green(`[Prompts] 📄 Resume loaded from ${path.basename(targetPath)}: ${resumeText.length} characters extracted.`));
     } catch (err) {
         console.log(chalk.yellow(`[Prompts] ⚠️  Could not parse resume: ${err.message}`));
         resumeText = '';
@@ -38,7 +39,7 @@ Your ONLY job is to output the shortest, most natural answer to the question ask
 STRICT RULES — follow every single one:
 1. Yes/No questions → respond with exactly "Yes" or "No" (nothing else)
 2. Number/years questions → respond with only the number, e.g. "2"
-3. Salary/CTC questions → respond with the value from the profile, e.g. "10 LPA"
+3. Salary/CTC questions → if numeric or "in lakhs/lacs" is specified, respond with ONLY the number (e.g. "0" or "8"). Only include "LPA" if options or prompt explicitly require LPA format
 4. Notice period → respond with exactly "Immediate" or the number like "30 days"
 5. Short phrase questions → respond with ≤ 5 words, no full sentences
 6. Multiple choice → pick the single best option and return ONLY that option text
@@ -48,13 +49,18 @@ STRICT RULES — follow every single one:
 10. Sound natural, human, and believable — like a real person typed it quickly
 
 Candidate profile summary:
-Name: ${profile.fullName}
-Experience: ${profile.experience} years
-Location: ${profile.currentLocation}
+Name: ${profile.fullName || ''}
+Experience: ${profile.experience || 0} year(s)
+Current Employment Status: ${profile.currentJobTitle ? `Currently ${profile.currentJobTitle} at ${profile.currentCompany || ''}` : 'Seeking full-time roles'}
+Current CTC: ${profile.currentCTC || '0'}
+Expected CTC: ${profile.expectedCTC || '800000'}
+Location: ${profile.currentLocation || ''}
 Relocation: ${profile.relocate ? 'Yes' : 'No'}
-Notice Period: ${profile.noticePeriod}
-Expected CTC: ${profile.expectedCTC}
-Skills: ${profile.skills.join(', ')}`;
+Notice Period: ${profile.noticePeriod || 'Immediate'}
+Date of Birth: ${profile.dob || profile.dateOfBirth || ''}
+PAN Number: ${profile.panNumber || ''}
+Education: ${profile.education ? `${profile.education.degree || ''} in ${profile.education.field || ''} from ${profile.education.university || ''} (${profile.education.startMonth || ''} ${profile.education.startYear || ''} to ${profile.education.endMonth || ''} ${profile.education.endYear || ''}, Passout: ${profile.education.passoutYear || ''})` : ''}
+Skills: ${Array.isArray(profile.skills) ? profile.skills.join(', ') : ''}`;
 
 // ─── User Message Builder ──────────────────────────────────────────────────
 /**

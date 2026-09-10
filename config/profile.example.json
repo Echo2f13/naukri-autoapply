@@ -1,0 +1,73 @@
+{
+  "fullName": "Jane Doe",
+  "firstName": "Jane",
+  "lastName": "Doe",
+  "email": "jane.doe@example.com",
+  "mobile": "+91 9876543210",
+  "dateOfBirth": "01/01/2001",
+  "dob": "01 January 2001",
+  "panNumber": "ABCDE1234F",
+  "experience": 1,
+  "currentLocation": "Bangalore",
+  "postalCode": "560001",
+  "address": {
+    "street": "123 Innovation Way, Tech Park",
+    "city": "Bangalore",
+    "state": "Karnataka",
+    "zipCode": "560001",
+    "country": "India"
+  },
+  "relocate": true,
+  "noticePeriod": "Immediate",
+  "expectedCTC": "800000",
+  "currentCTC": "0",
+  "currentCompany": "Example Tech Solutions",
+  "currentJobTitle": "Software Development Intern",
+  "github": "https://github.com/example-candidate",
+  "linkedin": "https://www.linkedin.com/in/example-candidate",
+  "education": {
+    "degree": "Bachelor of Technology",
+    "degreeType": "B.Tech",
+    "university": "Example National Institute of Technology",
+    "field": "Computer Science and Engineering",
+    "startMonth": "August",
+    "startYear": "2020",
+    "endMonth": "May",
+    "endYear": "2024",
+    "currentlyPursuing": false,
+    "passoutYear": "2024"
+  },
+  "skills": [
+    "Python",
+    "Go",
+    "Java",
+    "C++",
+    "TypeScript",
+    "FastAPI",
+    "Django",
+    "REST APIs",
+    "SQL",
+    "PostgreSQL",
+    "React",
+    "Docker",
+    "Git",
+    "Linux",
+    "AWS EC2",
+    "AWS S3"
+  ],
+  "jobRoles": [
+    "Software Engineer",
+    "Backend Developer",
+    "Software Developer",
+    "AI Engineer",
+    "Full Stack Developer"
+  ],
+  "locations": [
+    "Bangalore",
+    "Hyderabad",
+    "Chennai",
+    "Remote"
+  ],
+  "excludedCompanies": [],
+  "summary": "Full Stack and Backend Engineer with practical experience in building microservices, REST APIs, and scalable web platforms using Python, TypeScript, PostgreSQL, and modern cloud technologies."
+}

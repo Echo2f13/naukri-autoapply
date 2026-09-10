@@ -22,8 +22,10 @@ async function ensureLogin(page) {
         }, settings.selectors.loginButton, { timeout: 0 }); // 0 means no timeout
 
         console.log("Login detected!");
+        return true;
     } else {
         console.log("Active session detected.");
+        return true;
     }
 }
 
