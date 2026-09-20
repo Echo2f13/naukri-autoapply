@@ -2,7 +2,7 @@
 
 const chalk = require('chalk');
 const profile = require('../../config/profile');
-const { executeSubmissionSafely } = require('../safetyBoundary');
+const { confirmAndExecuteSubmission, executeSubmissionSafely } = require('../safetyBoundary');
 const { getAnswerWithProvenance } = require('../../ai/answerEngine');
 const { Provenance } = require('../../ai/answerProvenance');
 const { randomDelay } = require('../../automation/utils');
@@ -32,7 +32,7 @@ function generateStartupPitch(job) {
  * @returns {Promise<{ status: 'SUCCESS'|'FAILED'|'SKIPPED', message: string }>}
  */
 async function handleWellfoundNative(page, job, options = {}) {
-    const dryRun = options.dryRun || false;
+    const dryRun = options.dryRun !== undefined ? !!options.dryRun : true;
     console.log(chalk.blue.bold(`\n[Wellfound Native] Starting application for "${job.title}" at "${job.company}"...`));
 
     try {
@@ -64,11 +64,21 @@ async function handleWellfoundNative(page, job, options = {}) {
         const btnText = (await applyBtn.innerText().catch(() => '')).trim();
         const isInstantApply = /quick apply|1-click|instant/i.test(btnText);
 
-        if (dryRun && isInstantApply) {
-            return await executeSubmissionSafely({
-                dryRun: true,
+        if (isInstantApply) {
+            return await confirmAndExecuteSubmission({
+                dryRun,
+                job,
+                resumeUsed: 'Wellfound Profile & Pitch Note',
+                destination: 'Wellfound Native (1-Click)',
                 actionName: `Wellfound 1-Click Apply ("${btnText}")`,
-                execute: async () => ({ status: 'SUCCESS' })
+                execute: async () => {
+                    console.log(chalk.yellow(`  Clicking "${btnText}"...`));
+                    await applyBtn.click();
+                    await randomDelay(2000, 3000);
+                    return { status: 'SUCCESS', message: 'Submitted via Wellfound 1-Click Apply' };
+                },
+                promptFn: options.promptFn,
+                isInteractive: options.isInteractive
             });
         }
 
@@ -111,16 +121,37 @@ async function handleWellfoundNative(page, job, options = {}) {
                     console.log(chalk.bold.yellow('  [DRY RUN] Final Send application button reached on Wellfound. Stopping before submission.'));
                     const closeBtn = noteModal.locator(selectors.dismissButton).first();
                     await closeBtn.click().catch(() => {});
-                    return await executeSubmissionSafely({
+                    return await confirmAndExecuteSubmission({
                         dryRun: true,
+                        job,
+                        resumeUsed: 'Tailored Startup Pitch Note',
+                        destination: 'Wellfound Native (Application Note)',
                         actionName: 'Wellfound Send Application Note',
                         execute: async () => ({ status: 'SUCCESS' })
                     });
                 }
 
-                console.log(chalk.yellow('  Clicking Send application...'));
-                await sendBtn.click();
-                await randomDelay(2000, 3000);
+                const submissionGate = await confirmAndExecuteSubmission({
+                    dryRun: false,
+                    job,
+                    resumeUsed: 'Tailored Startup Pitch Note',
+                    destination: 'Wellfound Native (Application Note)',
+                    actionName: 'Wellfound Send Application Note',
+                    execute: async () => {
+                        console.log(chalk.yellow('  Clicking Send application...'));
+                        await sendBtn.click();
+                        await randomDelay(2000, 3000);
+                        return { status: 'SUCCESS', message: 'Submitted via Wellfound Native flow' };
+                    },
+                    promptFn: options.promptFn,
+                    isInteractive: options.isInteractive
+                });
+
+                if (!submissionGate.submitted) {
+                    const closeBtn = noteModal.locator(selectors.dismissButton).first();
+                    await closeBtn.click().catch(() => {});
+                    return submissionGate;
+                }
             }
         } else {
             // Instant 1-click apply succeeded without modal

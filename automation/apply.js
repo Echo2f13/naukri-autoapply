@@ -10,8 +10,9 @@ const { routeAndApply } = require('../application/router');
  * @param {any} job 
  * @returns {Promise<{ status: 'SUCCESS'|'FAILED'|'SKIPPED', message: string }>}
  */
-async function applyToJob(page, job) {
-    return await routeAndApply(page, job);
+async function applyToJob(page, job, options = {}) {
+    const dryRun = options.dryRun !== undefined ? !!options.dryRun : true;
+    return await routeAndApply(page, job, { ...options, dryRun });
 }
 
 module.exports = { applyToJob };

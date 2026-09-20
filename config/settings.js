@@ -10,7 +10,10 @@ const settings = {
   // Ollama local AI settings
   ollamaBaseUrl: process.env.OLLAMA_BASE_URL || 'http://localhost:11434',
   resumePath: (() => {
-    if (process.env.RESUME_PATH) return path.resolve(process.env.RESUME_PATH);
+    if (process.env.RESUME_PATH) {
+      const explicit = path.resolve(process.env.RESUME_PATH);
+      if (require('fs').existsSync(explicit)) return explicit;
+    }
     const resumeDir = path.resolve(__dirname, '../resume');
     try {
       if (require('fs').existsSync(resumeDir)) {

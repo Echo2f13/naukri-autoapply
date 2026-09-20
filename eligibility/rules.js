@@ -5,13 +5,16 @@ const profile = require('../config/profile');
 /**
  * Predicate rule: Evaluates minimum experience against candidate's threshold.
  */
-function checkExperienceRule(job, maxCandidateExp = 1) {
-    const threshold = maxCandidateExp + 1; // 1-year tolerance for bucket ranges (e.g. 1-3 yrs)
-    if (typeof job.minExperience === 'number' && job.minExperience > threshold) {
+function checkExperienceRule(job, maxCandidateExp) {
+    const candidateMax = typeof maxCandidateExp === 'number'
+        ? maxCandidateExp
+        : (profile.maxExperience || profile.experience || 2);
+
+    if (typeof job.minExperience === 'number' && job.minExperience > candidateMax) {
         return {
             passed: false,
             reason: 'SKIPPED_EXPERIENCE',
-            detail: `Job requires minimum ${job.minExperience} yrs exp (candidate max: ${threshold} yrs)`
+            detail: `Job requires minimum ${job.minExperience} yrs exp (candidate max: ${candidateMax} yrs)`
         };
     }
     return { passed: true };

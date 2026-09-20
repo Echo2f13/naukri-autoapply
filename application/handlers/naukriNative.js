@@ -4,6 +4,7 @@ const chalk = require('chalk');
 const { handleQuestions, resetQuestionHistory } = require('../../automation/questionHandlers');
 const { randomDelay } = require('../../automation/utils');
 const { setCurrentJobContext } = require('../../ai/answerEngine');
+const { confirmAndExecuteSubmission } = require('../safetyBoundary');
 
 /**
  * Handles native Naukri job applications (direct apply, modal questionnaires, and chatbot drawer).
@@ -13,7 +14,7 @@ const { setCurrentJobContext } = require('../../ai/answerEngine');
  * @returns {Promise<{ status: 'SUCCESS'|'FAILED'|'SKIPPED', message: string, qa?: any[] }>}
  */
 async function handleNaukriNativeApplication(page, job, options = {}) {
-    const dryRun = options.dryRun || false;
+    const dryRun = options.dryRun !== undefined ? !!options.dryRun : true;
     resetQuestionHistory();
     setCurrentJobContext(job);
     console.log(chalk.blue.bold(`\n[Naukri Native] Applying to ${job.title || job.role} at ${job.company}...`));
@@ -46,17 +47,25 @@ async function handleNaukriNativeApplication(page, job, options = {}) {
             return { status: 'FAILED', message: 'Apply button missing' };
         }
 
-        if (dryRun) {
-            console.log(chalk.bold.yellow('  🛡️  [SAFETY BARRIER] Apply button verified on Naukri. Stopped before clicking in Dry-Run.'));
-            return {
-                status: 'DRY_RUN_READY_TO_SUBMIT',
-                message: '[DRY-RUN] Reached native apply button on Naukri without submitting'
-            };
-        }
+        const submissionGate = await confirmAndExecuteSubmission({
+            dryRun,
+            job,
+            resumeUsed: 'Default Naukri Profile Resume',
+            destination: 'Naukri Native',
+            actionName: 'Naukri 1-Click Apply Button',
+            execute: async () => {
+                console.log(chalk.yellow("  Clicking Apply..."));
+                await applyBtn.click({ force: true });
+                await randomDelay(1000, 1800);
+                return { status: 'SUCCESS' };
+            },
+            promptFn: options.promptFn,
+            isInteractive: options.isInteractive
+        });
 
-        console.log(chalk.yellow("  Clicking Apply..."));
-        await applyBtn.click({ force: true });
-        await randomDelay(1000, 1800);
+        if (!submissionGate.submitted) {
+            return submissionGate;
+        }
 
         // Check for error banner after click
         const requestErrorAfterClick = page.locator('text=/There was an error while processing your request/i').first();
@@ -82,8 +91,12 @@ async function handleNaukriNativeApplication(page, job, options = {}) {
             const isClassic = await classicForm.isVisible().catch(() => false);
 
             const container = isChatbot ? chatbotOverlay : (isClassic ? classicForm : page);
-            const sendBtn = chatbotOverlay.locator('div.sendMsg, .send-msg-btn').first();
-            const nextBtn = container.locator('button:text-is("Submit"), button:text-is("Next"), button:text-is("Apply Now"), button:text-is("Save"), .save-button').first();
+            const sendBtn = (typeof chatbotOverlay.locator === 'function')
+                ? chatbotOverlay.locator('div.sendMsg, .send-msg-btn').first()
+                : page.locator('div.sendMsg, .send-msg-btn').first();
+            const nextBtn = (typeof container.locator === 'function')
+                ? container.locator('button:text-is("Submit"), button:text-is("Next"), button:text-is("Apply Now"), button:text-is("Save"), .save-button').first()
+                : page.locator('button:text-is("Submit"), button:text-is("Next"), button:text-is("Apply Now"), button:text-is("Save"), .save-button').first();
 
             const isSendVisible = await sendBtn.isVisible().catch(() => false);
             const isNextVisible = await nextBtn.isVisible().catch(() => false);

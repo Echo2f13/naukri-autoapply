@@ -1,8 +1,8 @@
 'use strict';
 
 const chalk = require('chalk');
-const { routeAndApply } = require('./router');
-const { isJobAlreadyApplied, recordApplicationResult } = require('../db/repository');
+const router = require('./router');
+const dbRepo = require('../db/repository');
 const { randomDelay } = require('../automation/utils');
 const settings = require('../config/settings');
 
@@ -43,7 +43,9 @@ class ApplicationCoordinator {
      * @returns {Promise<{ applied: number, succeeded: number, failed: number, skipped: number, results: any[] }>}
      */
     async processApplications(rankedJobs = [], options = {}) {
-        const maxApply = options.maxApply || settings.maxApplicationsPerRun || 10;
+        const maxApply = options.maxApply !== undefined && !isNaN(options.maxApply)
+            ? options.maxApply
+            : (settings.maxApplicationsPerRun || 10);
         const minScore = options.minScore !== undefined ? options.minScore : 50;
         const dryRun = !!options.dryRun;
 
@@ -57,6 +59,8 @@ class ApplicationCoordinator {
             totalAttempted: 0,
             succeeded: 0,
             dryRunReady: 0,
+            aborted: 0,
+            blocked: 0,
             failed: 0,
             skipped: 0,
             results: []
@@ -78,14 +82,15 @@ class ApplicationCoordinator {
             }
 
             // Fresh database check
-            const alreadyApplied = await isJobAlreadyApplied(job);
+            const alreadyApplied = await dbRepo.isJobAlreadyApplied(job);
             if (alreadyApplied) {
                 console.log(chalk.gray(`[Already Applied] "${job.title}" at "${job.company}". Skipping.`));
                 stats.skipped++;
                 continue;
             }
 
-            console.log(chalk.bold.cyan(`\n>>> [${appliedCount + 1}/${maxApply}] Applying: "${job.title}" at "${job.company}" (Score: ${score}/100, Source: ${job.source})`));
+            const maxLabel = maxApply === Infinity ? '∞' : maxApply;
+            console.log(chalk.bold.cyan(`\n>>> [${appliedCount + 1}/${maxLabel}] Applying: "${job.title}" at "${job.company}" (Score: ${score}/100, Source: ${job.source})`));
 
             stats.totalAttempted++;
             try {
@@ -93,12 +98,17 @@ class ApplicationCoordinator {
                     console.log(chalk.yellow(`  [Dry Run Defense-In-Depth] Exercising form application up to submission boundary: ${job.applicationUrl || job.sourceUrl}`));
                 }
 
-                const result = await routeAndApply(this.page, job, { context: this.context, dryRun });
+                const result = await router.routeAndApply(this.page, job, {
+                    context: this.context,
+                    dryRun,
+                    promptFn: options.promptFn,
+                    isInteractive: options.isInteractive
+                });
                 result.matchScore = score;
 
-                // Record result to database only if NOT in dryRun mode
-                if (!dryRun && result.status !== 'DRY_RUN_READY_TO_SUBMIT') {
-                    await recordApplicationResult(job, result);
+                // Record result to database only if NOT in dryRun mode and successfully submitted
+                if (!dryRun && result.status === 'SUCCESS') {
+                    await dbRepo.recordApplicationResult(job, result);
                 }
 
                 if (result.status === 'SUCCESS') {
@@ -108,6 +118,12 @@ class ApplicationCoordinator {
                     console.log(chalk.green(`  🛡️ [Dry Run Safe Barrier] Reached submission boundary for "${job.title}". Final submit was prevented.`));
                     stats.dryRunReady++;
                     appliedCount++;
+                } else if (result.status === 'CONFIRMATION_ABORTED') {
+                    console.log(chalk.yellow(`  🛑 [Human Gate] Submission aborted for "${job.title}". No action taken.`));
+                    stats.aborted++;
+                } else if (result.status === 'BLOCKED') {
+                    console.log(chalk.red(`  🚫 [Safety Boundary] Application blocked: ${result.reason || result.detail || 'Missing required data'}`));
+                    stats.blocked++;
                 } else if (result.status === 'SKIPPED') {
                     stats.skipped++;
                 } else {
@@ -119,21 +135,35 @@ class ApplicationCoordinator {
             } catch (err) {
                 console.error(chalk.red(`  ❌ Error applying to "${job.title}": ${err.message}`));
                 if (!dryRun) {
-                    await recordApplicationResult(job, { status: 'FAILED', message: err.message, matchScore: score });
+                    await dbRepo.recordApplicationResult(job, { status: 'FAILED', message: err.message, matchScore: score });
                 }
                 stats.failed++;
                 stats.results.push({ job, result: { status: 'FAILED', message: err.message } });
             }
 
             // Human delay between applications
-            const delay = Math.floor(Math.random() * (settings.maxDelay - settings.minDelay + 1)) + settings.minDelay;
+            const minWait = (settings.delays && settings.delays.min) || 500;
+            const maxWait = (settings.delays && settings.delays.max) || 1500;
+            const delay = Math.floor(Math.random() * (maxWait - minWait + 1)) + minWait;
             console.log(chalk.gray(`  Pausing ${(delay / 1000).toFixed(1)}s before next application...`));
-            await randomDelay(settings.minDelay, settings.maxDelay);
+            await randomDelay(minWait, maxWait);
         }
 
-        console.log(chalk.bold.green(`\n============================================================`));
-        console.log(chalk.bold.green(`  BATCH COMPLETE: ${stats.succeeded} Succeeded | ${stats.dryRunReady} Dry-Run Ready | ${stats.failed} Failed | ${stats.skipped} Skipped`));
-        console.log(chalk.bold.green(`============================================================\n`));
+        console.log(chalk.bold.cyan(`
+════════════════════════════════════════════════════════════
+                 PIPELINE EXECUTION SUMMARY                 
+════════════════════════════════════════════════════════════
+  Total Ranked in Batch : ${rankedJobs.length}
+  Attempted Execution   : ${stats.totalAttempted}
+  Real Succeeded (Live) : ${chalk.bold(stats.succeeded)}
+  Dry-Run Ready         : ${chalk.bold(stats.dryRunReady)}
+  Blocked (Data/Resume) : ${stats.blocked}
+  Human Aborted         : ${stats.aborted}
+  Failed (Errors)       : ${stats.failed}
+  Skipped (Score/Apply) : ${stats.skipped}
+════════════════════════════════════════════════════════════
+`));
+        console.log(chalk.bold.green(`  BATCH COMPLETE: ${stats.succeeded} Succeeded | ${stats.dryRunReady} Dry-Run Ready | ${stats.aborted} Aborted | ${stats.failed} Failed | ${stats.skipped} Skipped\n`));
 
         return stats;
     }

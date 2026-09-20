@@ -68,6 +68,7 @@ async function checkOllama() {
  * @returns {Promise<string|null>}
  */
 async function askOllama(systemPrompt, userMessage) {
+    if (process.env.AUTOMATED_TEST === 'true') return null;
     if (!ollamaOnline || !activeModel) {
         // Auto-initialize connection if not previously verified
         const ok = await checkOllama();

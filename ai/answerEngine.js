@@ -1,11 +1,14 @@
 const fs = require('fs');
 const path = require('path');
+const readline = require('readline');
 const chalk = require('chalk');
 const profile = require('../config/profile');
 const { askLMStudio, isLMStudioOnline } = require('./lmstudio');
 const { askOllama, isOllamaOnline } = require('./ollama');
 const { buildQuestionPrompt } = require('./prompts');
 const { AnswerSource, Confidence, createResolvedAnswer } = require('./answerProvenance');
+const { promptHumanIntervention } = require('./humanIntervention');
+const { resolveCandidateFact, isPersonalFactQuestion, matchAtsOption, validateStructuredField } = require('./candidateFacts');
 
 // ─── Active LLM Selection ─────────────────────────────────────────────────────
 // Set by the startup menu in index.js before automation begins.
@@ -140,19 +143,51 @@ function isExperienceQuestion(questionText) {
 
 // ─── Hardcoded Personal Facts ─────────────────────────────────────────────────
 /**
- * A small set of personal facts answered directly from profile.json.
- * These are answered instantly without calling the LLM.
- * The key is a lowercase substring that must appear in the question.
+ * A comprehensive set of candidate personal facts answered directly from profile.json.
+ * These are answered instantly and deterministically without calling the LLM.
+ * Semantic location rules distinguish education location (Vellore, Tamil Nadu) from
+ * current residence (Hyderabad, Telangana) and preferred work locations.
  */
 const PERSONAL_FACTS = [
-    // Notice period
-    { match: ['notice period', 'notice'],                answer: () => profile.noticePeriod },
-    // Relocation
-    { match: ['relocat', 'willing to move', 'open to relocat'], answer: () => profile.relocate ? 'Yes' : 'No' },
-    // Current location / city
-    { match: ['current location', 'current city', 'residing', 'currently based', 'where are you based'],
-                                                          answer: () => profile.currentLocation },
-    // Expected CTC / salary
+    // 1. Education location / city
+    { match: ['education city', 'university city', 'college city', 'school city', 'institute city', 'university location', 'college location', 'education location', 'campus city', 'campus location'],
+      answer: () => profile.education?.educationCity || profile.education?.city || profile.education?.universityCity || 'Vellore' },
+    // 2. Education state
+    { match: ['education state', 'university state', 'college state', 'school state', 'campus state'],
+      answer: () => profile.education?.educationState || profile.education?.state || 'Tamil Nadu' },
+    // 3. Current City / Residence City
+    { match: ['current city', 'present city', 'residing city', 'living in city', 'city of residence', 'your city', 'home city'],
+      answer: (q = '') => {
+          const qLower = (q || '').toLowerCase();
+          if (qLower.includes('university') || qLower.includes('education') || qLower.includes('college') || qLower.includes('school')) {
+              return profile.education?.educationCity || profile.education?.city || 'Vellore';
+          }
+          return profile.currentCity || profile.address?.city || 'Hyderabad';
+      }
+    },
+    // 4. Current State / Residence State
+    { match: ['current state', 'state of residence', 'living in state'],
+      answer: (q = '') => {
+          const qLower = (q || '').toLowerCase();
+          if (qLower.includes('university') || qLower.includes('education') || qLower.includes('college') || qLower.includes('school')) {
+              return profile.education?.educationState || profile.education?.state || 'Tamil Nadu';
+          }
+          return profile.currentState || profile.address?.state || 'Telangana';
+      }
+    },
+    // 5. Current Location / General Residence
+    { match: ['current location', 'residing in', 'currently based', 'where are you based', 'present location', 'current address'],
+      answer: () => profile.currentLocation || profile.currentCity || profile.address?.city || 'Hyderabad' },
+    // 6. Preferred location
+    { match: ['preferred location', 'preferred city', 'desired location', 'work location preference', 'preferred work location'],
+      answer: () => (Array.isArray(profile.preferredLocations) ? profile.preferredLocations.join(', ') : profile.preferredLocation) || (Array.isArray(profile.locations) ? profile.locations.filter(l => l.toLowerCase() !== 'remote').join(', ') : 'Hyderabad, Bangalore') },
+    // 7. Notice period
+    { match: ['notice period', 'notice', 'how soon can you join', 'joining period', 'availability to join', 'available to start'],
+      answer: () => profile.noticePeriod || 'Immediate' },
+    // 8. Relocation
+    { match: ['relocat', 'willing to move', 'open to relocat'],
+      answer: () => (profile.willingToRelocate !== undefined ? (profile.willingToRelocate ? 'Yes' : 'No') : (profile.relocate ? 'Yes' : 'No')) },
+    // 9. Expected CTC / salary
     { match: ['expected ctc', 'expected salary', 'salary expectation', 'ctc expectation', 'what is your expected'],
       answer: (q = '') => {
           const qLower = (q || '').toLowerCase();
@@ -165,7 +200,7 @@ const PERSONAL_FACTS = [
           return raw;
       }
     },
-    // Current CTC
+    // 10. Current CTC
     { match: ['current ctc', 'current salary', 'current package'],
       answer: (q = '') => {
           const qLower = (q || '').toLowerCase();
@@ -173,26 +208,37 @@ const PERSONAL_FACTS = [
           return profile.currentCTC || '0';
       }
     },
-    // Years of experience (total)
+    // 11. Years of experience (total)
     { match: ['total experience', 'years of experience', 'how many years', 'overall experience'],
-                                                          answer: () => getExperienceAnswer() },
-    // Name
-    { match: ['your name', 'full name', 'candidate name'],
-                                                          answer: () => profile.fullName },
-    // Email
-    { match: ['email', 'e-mail'],                        answer: () => profile.email },
-    // Phone / mobile
-    { match: ['phone', 'mobile', 'contact number'],      answer: () => profile.mobile },
-    // Date of Birth
-    { match: ['date of birth', 'dob', 'birth date', 'birthdate'], answer: () => profile.dateOfBirth || profile.dob || '' },
-    // PAN Card / Number
-    { match: ['pan number', 'pan card', 'pan no', 'permanent account number', /\bpan\b/i], answer: () => profile.panNumber || '' },
-    // Graduation year / Passout year
-    { match: ['graduation year', 'year of graduation', 'passout year', 'year of passing', 'passing year', 'batch', 'passout'], answer: () => String(profile.education?.passoutYear || profile.graduationYear || '') },
-    // Degree / Education
-    { match: ['degree', 'highest qualification', 'education level'], answer: () => profile.education?.degree || '' },
-    // University / College
-    { match: ['university', 'college', 'institute', 'school'], answer: () => profile.education?.university || '' },
+      answer: () => getExperienceAnswer() },
+    // 12. Name
+    { match: ['your name', 'full name', 'candidate name'], answer: () => profile.fullName || profile.name || '' },
+    // 13. Date of Birth
+    { match: ['date of birth', 'dob', 'birth date', 'birthdate'],
+      answer: () => profile.dateOfBirth || profile.dob || '01/01/2001' },
+    // 14. PAN Card
+    { match: ['pan card', 'pan number', 'pan'],
+      answer: () => profile.pan || profile.panCard || profile.panNumber || '' },
+    // 15. Graduation / Passout Year
+    { match: ['graduation year', 'year of graduation', 'passout year', 'pass out year', 'passing year', 'year of passing', 'batch'],
+      answer: () => String(profile.education?.passoutYear || profile.passoutYear || profile.graduationYear || '2024') },
+    // 16. Degree & Major
+    { match: ['degree', 'highest degree', 'qualification', 'highest qualification', 'course'],
+      answer: () => profile.education?.degree || profile.degree || 'Bachelor of Technology' },
+    { match: ['field of study', 'major', 'branch', 'specialization', 'discipline'],
+      answer: () => profile.education?.major || profile.major || 'Computer Science' },
+    { match: ['university', 'college', 'institute', 'school'],
+      answer: () => profile.education?.university || profile.university || '' },
+    // 17. Contact Info
+    { match: ['email', 'email address'], answer: () => profile.email || '' },
+    { match: ['phone', 'mobile', 'contact number', 'phone number', 'cell'], answer: () => profile.mobile || profile.phone || '' },
+    // 18. Gender
+    { match: ['gender', 'sex'], answer: () => profile.gender || 'Male' },
+    // 19. Work Authorization & Sponsorship
+    { match: ['legally authorized to work', 'authorized to work', 'work authorization', 'eligible to work', 'legally eligible'],
+      answer: () => 'Yes' },
+    { match: ['require sponsorship', 'require visa', 'need sponsorship', 'sponsorship in future', 'visa sponsorship'],
+      answer: () => 'No' }
 ];
 
 /**
@@ -200,6 +246,10 @@ const PERSONAL_FACTS = [
  * Returns the answer string if matched, or null.
  */
 function checkPersonalFact(question) {
+    const res = resolveCandidateFact(question);
+    if (res && res.resolved) {
+        return res.answer;
+    }
     const q = question.toLowerCase();
     for (const fact of PERSONAL_FACTS) {
         if (fact.match.some(keyword => keyword instanceof RegExp ? keyword.test(question) : q.includes(keyword))) {
@@ -265,6 +315,19 @@ function findCachedAnswer(question, options = [], source = 'naukri') {
  * Saves a new question-answer pair to the appropriate JSON database.
  */
 function saveAnswer(question, answer, source = 'naukri', hasOptions = false) {
+    // 1. Never save if the answer is already a canonical profile fact!
+    const canonical = resolveCandidateFact(question);
+    if (canonical && canonical.resolved) {
+        return;
+    }
+
+    // 2. Validate structured fields to prevent saving bogus answers (e.g. State -> Amazon)
+    const validation = validateStructuredField(question, String(answer));
+    if (!validation.valid) {
+        console.log(chalk.yellow(`  ⚠️ [Cache] Rejected invalid answer for "${question}": ${validation.message}`));
+        return;
+    }
+
     let filePath;
     if (source === 'workday') {
         filePath = hasOptions ? workdayOptionsAnswersPath : workdayTextAnswersPath;
@@ -275,18 +338,40 @@ function saveAnswer(question, answer, source = 'naukri', hasOptions = false) {
     const db = JSON.parse(fs.readFileSync(filePath, 'utf8'));
     db[question.toLowerCase().trim()] = answer;
     fs.writeFileSync(filePath, JSON.stringify(db, null, 2));
-    console.log(chalk.gray(`  [Cache] Saved answer for: "${question}"`));
+    console.log(chalk.gray(`  [Cache] Saved verified human answer for: "${question}"`));
 }
 
 // ─── Manual Terminal Fallback ─────────────────────────────────────────────────
-function promptUser() {
+async function promptUser(query = '> ') {
+    if (!process.stdin || !process.stdout || process.stdin.destroyed) {
+        return '';
+    }
     const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
     return new Promise(resolve => {
-        rl.question('> ', (ans) => {
+        rl.question(query, (ans) => {
             rl.close();
-            resolve(ans.trim());
+            resolve((ans || '').trim());
         });
     });
+}
+
+/**
+ * Checks whether a question asks for candidate personal facts.
+ * Personal facts must NEVER be guessed or hallucinated by an LLM.
+ */
+function isPersonalCandidateFact(questionText = '') {
+    const q = questionText.toLowerCase();
+    const factKeywords = [
+        'graduation', 'graduat', 'passout', 'passing year', 'batch', 'month of',
+        'visa', 'sponsorship', 'authorized to work', 'work authorization', 'citizenship',
+        'notice period', 'notice', 'joining', 'how soon can you join', 'start date',
+        'ctc', 'salary', 'compensation', 'package', 'expected',
+        'experience', 'years of', 'how many years',
+        'city', 'location', 'residing', 'residence', 'address', 'state', 'country', 'relocate', 'relocation',
+        'degree', 'education', 'university', 'college', 'school', 'institute', 'gpa', 'percentage', 'marks',
+        'gender', 'date of birth', 'dob', 'pan', 'aadhaar', 'ssn', 'phone', 'mobile', 'email', 'name'
+    ];
+    return factKeywords.some(kw => q.includes(kw));
 }
 
 // ─── Main Answer Function ─────────────────────────────────────────────────────
@@ -312,8 +397,9 @@ function promptUser() {
  * @param {string}   source
  * @returns {Promise<{ answer: string, source: string, confidence: string, question: string }>}
  */
-async function getAnswerWithProvenance(question, options = [], forceManual = false, source = 'naukri') {
-    const hasOptions = options && options.length > 0;
+async function getAnswerWithProvenance(question, options = [], forceManual = false, source = 'naukri', context = {}) {
+    const hasOptions = Array.isArray(options) && options.length > 0;
+    const sourceName = typeof source === 'string' ? source : (source?.source || 'naukri');
 
     // ── 0. Dynamic experience check ──────────────────────────────────────────
     if (!forceManual && isExperienceQuestion(question)) {
@@ -322,57 +408,69 @@ async function getAnswerWithProvenance(question, options = [], forceManual = fal
         return createResolvedAnswer(expAns, AnswerSource.VERIFIED_PROFILE, Confidence.HIGH, question);
     }
 
-    // ── 1. Skill-confidence auto-answer ──────────────────────────────────────
+    // ── 1. Skill-confidence profile verification ──────────────────────────────
     if (!forceManual && hasOptions) {
         const isYesNoOptions = options.some(o => /^yes$/i.test(o.trim())) &&
                                options.some(o => /^no$/i.test(o.trim()));
         const isSkillQuestion = /do you have|have you|are you (familiar|proficient|experienced|able)|can you|did you (use|work|build|design|develop|operate)/i.test(question);
         if (isYesNoOptions && isSkillQuestion) {
-            const yesOpt = options.find(o => /^yes$/i.test(o.trim())) || 'Yes';
-            console.log(chalk.green(`  [Skill] Auto-answering "Yes" for: "${question}"`));
-            return createResolvedAnswer(yesOpt, AnswerSource.VERIFIED_PROFILE, Confidence.HIGH, question);
+            const candidateSkills = (profile.skills || []).map(s => s.toLowerCase());
+            const qLower = question.toLowerCase();
+            const hasExplicitSkill = candidateSkills.some(skill => qLower.includes(skill));
+            if (hasExplicitSkill) {
+                const yesOpt = options.find(o => /^yes$/i.test(o.trim())) || 'Yes';
+                console.log(chalk.green(`  [Skill Verified] "${question}" matches profile skills → "Yes"`));
+                return createResolvedAnswer(yesOpt, AnswerSource.VERIFIED_PROFILE, Confidence.HIGH, question);
+            }
+            console.log(chalk.gray(`  [Skill Check] Question "${question}" asks for skill not in verified profile. Following strict answer hierarchy.`));
         }
     }
 
-    // ── 2. Hardcoded personal facts (profile.json) ───────────────────────────
+    // ── 2. Canonical Profile Facts (ai/candidateFacts.js) ────────────────────
     if (!forceManual) {
-        const factAnswer = checkPersonalFact(question);
-        if (factAnswer) {
+        const factRes = resolveCandidateFact(question);
+        const factAnswer = (factRes && factRes.resolved) ? factRes.answer : checkPersonalFact(question);
+        if (factAnswer && String(factAnswer).trim().length > 0) {
+            const factStr = String(factAnswer);
             if (hasOptions) {
-                const lower = factAnswer.toLowerCase();
-                const matched = options.find(opt => opt.toLowerCase().includes(lower) || lower.includes(opt.toLowerCase()));
-                if (matched) {
-                    console.log(chalk.blue(`  [Profile] "${question}" → "${matched}" (matched from fact: "${factAnswer}")`));
-                    return createResolvedAnswer(matched, AnswerSource.VERIFIED_PROFILE, Confidence.HIGH, question);
+                const matchRes = matchAtsOption(options, factStr, question);
+                if (matchRes.matched && matchRes.selectedOption) {
+                    console.log(chalk.blue(`  [Profile] "${question}" → "${matchRes.selectedOption}" (matched from fact: "${factStr}")`));
+                    return createResolvedAnswer(matchRes.selectedOption, AnswerSource.VERIFIED_PROFILE, Confidence.HIGH, question);
                 }
-                console.log(chalk.gray(`  [Profile] Fact "${factAnswer}" has no match in options — using AI/manual.`));
+                console.log(chalk.gray(`  [Profile] Fact "${factStr}" could not be matched unambiguously against options. Checking cache/human.`));
             } else {
-                console.log(chalk.blue(`  [Profile] "${question}" → "${factAnswer}"`));
-                return createResolvedAnswer(factAnswer, AnswerSource.VERIFIED_PROFILE, Confidence.HIGH, question);
+                console.log(chalk.blue(`  [Profile] "${question}" → "${factStr}"`));
+                return createResolvedAnswer(factStr, AnswerSource.VERIFIED_PROFILE, Confidence.HIGH, question);
             }
         }
     }
 
-    // ── 3. Learned Answer Cache (verified cache) ─────────────────────────────
+    // ── 3. Learned Answer Cache (verified candidate answer store) ────────────
     if (!forceManual) {
-        const cached = findCachedAnswer(question, options, source);
-        if (cached) {
+        const cached = findCachedAnswer(question, options, sourceName);
+        if (cached && String(cached).trim().length > 0) {
+            const cachedStr = String(cached);
             if (hasOptions) {
-                const lower = cached.toLowerCase();
-                const matched = options.find(opt => opt.toLowerCase().includes(lower) || lower.includes(opt.toLowerCase()));
-                if (matched) {
-                    console.log(chalk.green(`  [Cache] "${question}" → "${matched}" (matched from: "${cached}")`));
-                    return createResolvedAnswer(matched, AnswerSource.VERIFIED_CACHE, Confidence.HIGH, question);
+                const matchRes = matchAtsOption(options, cachedStr, question);
+                if (matchRes.matched && matchRes.selectedOption) {
+                    console.log(chalk.green(`  [Cache] "${question}" → "${matchRes.selectedOption}" (matched from: "${cachedStr}")`));
+                    return createResolvedAnswer(matchRes.selectedOption, AnswerSource.VERIFIED_CACHE, Confidence.HIGH, question);
                 }
             } else {
-                console.log(chalk.green(`  [Cache] "${question}" → "${cached}"`));
-                return createResolvedAnswer(cached, AnswerSource.VERIFIED_CACHE, Confidence.HIGH, question);
+                console.log(chalk.green(`  [Cache] "${question}" → "${cachedStr}"`));
+                return createResolvedAnswer(cachedStr, AnswerSource.VERIFIED_CACHE, Confidence.HIGH, question);
             }
         }
     }
 
-    // ── 4. AI (LMStudio or Ollama) ───────────────────────────────────────────
-    if (!forceManual) {
+    // ── 4. AI Interpretation (ONLY for non-personal questions) ───────────────
+    // STRICT ANTI-GUESSING SAFETY: If the question asks for candidate facts
+    // (nationality, citizenship, education, institute, compensation, address, etc.),
+    // LLMs are strictly forbidden from guessing.
+    const isFact = isPersonalFactQuestion(question) || isPersonalCandidateFact(question);
+
+    if (!forceManual && !isFact) {
         const aiOnline = isLMStudioOnline() || isOllamaOnline() || activeLLM === 'auto';
         if (aiOnline) {
             try {
@@ -380,7 +478,7 @@ async function getAnswerWithProvenance(question, options = [], forceManual = fal
                 const llmLabel = activeLLM === 'auto'
                     ? (isLMStudioOnline() ? 'LMStudio' : 'Ollama')
                     : activeLLM;
-                console.log(chalk.magenta(`  [${llmLabel}] Asking: "${question}"`));
+                console.log(chalk.magenta(`  [${llmLabel}] Classifying general prompt: "${question}"`));
 
                 const aiAnswer = await callAI(system, user);
 
@@ -391,53 +489,45 @@ async function getAnswerWithProvenance(question, options = [], forceManual = fal
                         const lower = aiAnswer.toLowerCase();
                         const matched = options.find(o => o.toLowerCase().includes(lower) || lower.includes(o.toLowerCase()));
                         const finalAnswer = matched || aiAnswer;
-                        // Inferred from LLM: return with INFERRED provenance, DO NOT pollute verified cache
                         return createResolvedAnswer(finalAnswer, AnswerSource.LLM_INFERRED, Confidence.MEDIUM, question);
                     }
 
-                    // Inferred from LLM: return with INFERRED provenance, DO NOT pollute verified cache
                     return createResolvedAnswer(aiAnswer, AnswerSource.LLM_INFERRED, Confidence.MEDIUM, question);
                 }
-
-                console.log(chalk.yellow(`  [${llmLabel}] Empty response. Falling back to manual.`));
             } catch (err) {
-                console.log(chalk.yellow(`  [AI] Error: ${err.message}. Falling back to manual.`));
+                console.log(chalk.yellow(`  [AI] Error: ${err.message}. Falling back to human intervention.`));
             }
         }
+    } else if (isFact) {
+        console.log(chalk.yellow(`  [Safety Boundary] Question "${question}" requires candidate fact not in verified profile/cache. LLM guessing prohibited. Requesting human intervention.`));
     }
 
-    // ── 5. Manual terminal prompt (User input IS saved to verified cache) ────
+    // ── 5. Reusable Human Intervention (Pause & Resume CLI) ───────────────────
+    const humanResult = await promptHumanIntervention({
+        question,
+        type: hasOptions ? 'dropdown' : 'text',
+        options: hasOptions ? options : [],
+        job: context?.job || (typeof source === 'object' ? source : { source: sourceName }),
+        reason: isFact ? 'Verified candidate profile does not contain this personal information.' : 'Automated answer engine requires human clarification.',
+        promptFn: context?.promptFn || (typeof forceManual === 'function' ? forceManual : null),
+        isInteractive: context?.isInteractive
+    });
+
+    if (humanResult && humanResult.answered && humanResult.value) {
+        saveAnswer(question, String(humanResult.value), sourceName, hasOptions);
+        const ans = createResolvedAnswer(String(humanResult.value), AnswerSource.MANUAL_PROMPT, Confidence.HIGH, question);
+        if (isFact) ans.needsHuman = true;
+        return ans;
+    }
+
+    if (isFact) {
+        const unans = createResolvedAnswer('', AnswerSource.MANUAL_PROMPT, Confidence.LOW, question);
+        unans.needsHuman = true;
+        return unans;
+    }
+
     if (process.env.AUTOMATED_TEST === 'true') {
         return createResolvedAnswer('', AnswerSource.LLM_INFERRED, Confidence.LOW, question);
-    }
-
-    console.log(chalk.red.bold(`\n--- MANUAL INTERVENTION REQUIRED ---`));
-    console.log(chalk.yellow(`QUESTION: "${question}"`));
-
-    if (hasOptions) {
-        console.log(chalk.cyan('OPTIONS:'));
-        options.forEach((opt, i) => console.log(chalk.white(`  [${i + 1}] ${opt}`)));
-        console.log(chalk.cyan('\nType option number(s) then Enter — e.g. "1" or "1,3" for multiple:'));
-    } else {
-        console.log(chalk.cyan('Type your answer (Enter to skip):'));
-    }
-
-    const manualAnswer = await promptUser();
-
-    if (manualAnswer) {
-        if (hasOptions && /^[\d\s,&]+$/.test(manualAnswer)) {
-            const indices = manualAnswer.split(/[\s,&]+/).map(s => parseInt(s) - 1).filter(idx => !isNaN(idx));
-            const selected = indices.filter(i => i >= 0 && i < options.length).map(i => options[i]);
-            if (selected.length > 0) {
-                const final = selected.join(', ');
-                console.log(chalk.green(`  Selected: "${final}"`));
-                saveAnswer(question, final, source, true);
-                return createResolvedAnswer(final, AnswerSource.MANUAL_PROMPT, Confidence.HIGH, question);
-            }
-        }
-
-        saveAnswer(question, manualAnswer, source, hasOptions);
-        return createResolvedAnswer(manualAnswer, AnswerSource.MANUAL_PROMPT, Confidence.HIGH, question);
     }
 
     return createResolvedAnswer('', AnswerSource.MANUAL_PROMPT, Confidence.LOW, question);
@@ -463,6 +553,8 @@ module.exports = {
     getAnswerWithProvenance,
     promptUser,
     findLearnedAnswer,
+    findCachedAnswer,
+    checkPersonalFact,
     saveAnswer,
     setActiveLLM,
     setCurrentJobContext,

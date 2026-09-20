@@ -3,7 +3,7 @@
 const fs = require('fs');
 const chalk = require('chalk');
 const profile = require('../../config/profile');
-const { executeSubmissionSafely } = require('../safetyBoundary');
+const { confirmAndExecuteSubmission, executeSubmissionSafely } = require('../safetyBoundary');
 const { selectResumeForJob } = require('../../automation/resumeSelector');
 const { getAnswer, getAnswerWithProvenance } = require('../../ai/answerEngine');
 const { Provenance } = require('../../ai/answerProvenance');
@@ -22,7 +22,7 @@ const selectors = require('../../sources/linkedin/selectors');
  * @returns {Promise<{ status: 'SUCCESS'|'FAILED'|'SKIPPED', message: string, resumeUsed?: string }>}
  */
 async function handleLinkedInEasyApply(page, job, options = {}) {
-    const dryRun = options.dryRun || false;
+    const dryRun = options.dryRun !== undefined ? !!options.dryRun : true;
     console.log(chalk.blue.bold(`\n[LinkedIn Easy Apply] Starting application for "${job.title}" at "${job.company}"...`));
 
     try {
@@ -94,6 +94,7 @@ async function handleLinkedInEasyApply(page, job, options = {}) {
         let step = 0;
         let sameStepCount = 0;
         let lastStepSignature = '';
+        let abortedGate = null;
 
         while (step < maxSteps) {
             step++;
@@ -164,17 +165,27 @@ async function handleLinkedInEasyApply(page, job, options = {}) {
                 } else if (labelLower.includes('notice') || labelLower.includes('joining')) {
                     answer = profile.noticePeriod || 'Immediate';
                 } else if (labelLower.includes('city') || labelLower.includes('location')) {
-                    answer = profile.city || profile.location || 'Hyderabad';
+                    if (labelLower.includes('university') || labelLower.includes('college') || labelLower.includes('school') || labelLower.includes('education')) {
+                        answer = profile.education?.educationCity || profile.education?.city || profile.education?.universityCity || 'Vellore';
+                    } else if (labelLower.includes('prefer') || labelLower.includes('desired')) {
+                        answer = (Array.isArray(profile.preferredLocations) ? profile.preferredLocations.join(', ') : profile.preferredLocation) || 'Hyderabad';
+                    } else {
+                        answer = profile.currentCity || profile.address?.city || profile.currentLocation || 'Hyderabad';
+                    }
                 } else if (labelLower.includes('linkedin') || labelLower.includes('profile url')) {
                     answer = profile.urls?.linkedin || profile.linkedin || '';
                 } else if (cleanLabel) {
                     // Safe Provenance-checked Answer Engine lookup
-                    const provAns = await getAnswerWithProvenance(cleanLabel, { role: job.title, company: job.company });
+                    const provAns = await getAnswerWithProvenance(cleanLabel, [], false, 'linkedin', {
+                        job,
+                        promptFn: options?.promptFn,
+                        isInteractive: options?.isInteractive
+                    });
                     if (provAns && provAns.answer) {
-                        // Strict provenance safety: Do not submit unverified wild guesses
-                        if (provAns.provenance === Provenance.VERIFIED_PROFILE ||
-                            provAns.provenance === Provenance.VERIFIED_CACHE ||
-                            provAns.confidence >= 0.8) {
+                        if (provAns.source === AnswerSource.VERIFIED_PROFILE ||
+                            provAns.source === AnswerSource.VERIFIED_CACHE ||
+                            provAns.confidence === Confidence.HIGH ||
+                            provAns.confidence === Confidence.MEDIUM) {
                             answer = provAns.answer;
                         } else {
                             console.log(chalk.gray(`    [Provenance] Low confidence answer for "${cleanLabel}". Not guessing.`));
@@ -192,7 +203,9 @@ async function handleLinkedInEasyApply(page, job, options = {}) {
 
             // B. Handle Resume Upload
             const fileInp = modal.locator(selectors.fileInput).first();
-            if (await fileInp.isVisible({ timeout: 400 }).catch(() => false) || await fileInp.count() > 0) {
+            const fileInpVisible = await fileInp.isVisible({ timeout: 400 }).catch(() => false);
+            const fileInpCount = (typeof fileInp.count === 'function') ? await fileInp.count().catch(() => 0) : 0;
+            if (fileInpVisible || fileInpCount > 0) {
                 const hasExistingResume = await modal.locator(selectors.uploadedResumeIndicator).count() > 0;
                 if (!hasExistingResume && resumePathExists) {
                     console.log(chalk.blue(`    -> Uploading tailored resume: ${selectedResume.fileName}`));
@@ -208,8 +221,12 @@ async function handleLinkedInEasyApply(page, job, options = {}) {
                 const checkedRadio = await group.locator('input[type="radio"]:checked').count();
                 if (checkedRadio === 0 && legend) {
                     const rawOptions = await group.locator('label').allInnerTexts().catch(() => []);
-                    const options = rawOptions.map(o => o.trim()).filter(Boolean);
-                    const ans = await getAnswer(legend, options.length > 0 ? options : ['Yes', 'No'], { role: job.title, company: job.company });
+                    const optionsList = rawOptions.map(o => o.trim()).filter(Boolean);
+                    const ans = await getAnswer(legend, optionsList.length > 0 ? optionsList : ['Yes', 'No'], false, 'linkedin', {
+                        job,
+                        promptFn: options?.promptFn,
+                        isInteractive: options?.isInteractive
+                    });
                     if (ans) {
                         const targetOption = group.locator(`label:has-text("${ans}"), input[value="${ans}"]`).first();
                         if (await targetOption.isVisible().catch(() => false)) {
@@ -237,11 +254,15 @@ async function handleLinkedInEasyApply(page, job, options = {}) {
                     labelText = await sel.getAttribute('aria-label').catch(() => '') || '';
                 }
 
-                const options = await sel.locator('option').allInnerTexts().catch(() => []);
-                const validOptions = options.map(o => o.trim()).filter(o => o && !o.toLowerCase().includes('select'));
+                const dropOptions = await sel.locator('option').allInnerTexts().catch(() => []);
+                const validOptions = dropOptions.map(o => o.trim()).filter(o => o && !o.toLowerCase().includes('select'));
                 if (validOptions.length > 0) {
                     const cleanQ = (labelText || 'Dropdown Question').trim();
-                    const chosen = await getAnswer(cleanQ, validOptions, { role: job.title, company: job.company });
+                    const chosen = await getAnswer(cleanQ, validOptions, false, 'linkedin', {
+                        job,
+                        promptFn: options?.promptFn,
+                        isInteractive: options?.isInteractive
+                    });
                     if (chosen) {
                         await sel.selectOption({ label: chosen }).catch(async () => {
                             await sel.selectOption({ value: chosen }).catch(() => {});
@@ -285,15 +306,31 @@ async function handleLinkedInEasyApply(page, job, options = {}) {
                     console.log(chalk.bold.yellow('  [DRY RUN] Final Submit application button reached! Stopping before final submission.'));
                     break;
                 }
-                console.log(chalk.yellow('  Clicking Submit application...'));
-                await submitBtn.click();
-                await randomDelay(2000, 3000);
+                const submissionGate = await confirmAndExecuteSubmission({
+                    dryRun: false,
+                    job,
+                    resumeUsed: selectedResume?.fileName,
+                    destination: 'LinkedIn Easy Apply',
+                    actionName: 'LinkedIn Easy Apply Submit',
+                    execute: async () => {
+                        console.log(chalk.yellow('  Clicking Submit application...'));
+                        await submitBtn.click();
+                        await randomDelay(2000, 3000);
+                        return {
+                            status: 'SUCCESS',
+                            message: 'Submitted via LinkedIn Easy Apply',
+                            resumeUsed: selectedResume?.fileName
+                        };
+                    },
+                    promptFn: options.promptFn,
+                    isInteractive: options.isInteractive
+                });
 
-                return {
-                    status: 'SUCCESS',
-                    message: 'Submitted via LinkedIn Easy Apply',
-                    resumeUsed: selectedResume?.fileName
-                };
+                if (!submissionGate.submitted) {
+                    abortedGate = submissionGate;
+                    break;
+                }
+                return submissionGate;
             } else if (await reviewBtn.isVisible({ timeout: 800 }).catch(() => false)) {
                 console.log(chalk.yellow('  Clicking Review...'));
                 await reviewBtn.click();
@@ -320,8 +357,11 @@ async function handleLinkedInEasyApply(page, job, options = {}) {
         }
 
         if (dryRun) {
-            return await executeSubmissionSafely({
+            return await confirmAndExecuteSubmission({
                 dryRun: true,
+                job,
+                resumeUsed: selectedResume?.fileName,
+                destination: 'LinkedIn Easy Apply',
                 actionName: 'LinkedIn Easy Apply Submit',
                 execute: async () => ({
                     status: 'SUCCESS',
@@ -329,6 +369,10 @@ async function handleLinkedInEasyApply(page, job, options = {}) {
                     resumeUsed: selectedResume?.fileName
                 })
             });
+        }
+
+        if (abortedGate) {
+            return abortedGate;
         }
 
         return { status: 'FAILED', message: 'Did not reach application submission confirmation' };

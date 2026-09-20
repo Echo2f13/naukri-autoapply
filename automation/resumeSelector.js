@@ -97,13 +97,35 @@ function selectResumeForJob(job = {}) {
     }
 
     const fileName = path.basename(chosenPath);
-    console.log(chalk.cyan(`[ResumeSelector] Selected ${chalk.bold(chosenType)} resume: "${fileName}" for role: "${job.role || 'Unknown'}" (Scores — AI: ${aiScore}, BE: ${beScore})`));
+    const exists = fs.existsSync(chosenPath);
+    console.log(chalk.cyan(`[ResumeSelector] Selected ${chalk.bold(chosenType)} resume: "${fileName}" for role: "${job.role || job.title || 'Unknown'}" (Scores — AI: ${aiScore}, BE: ${beScore})${exists ? '' : ' [FILE MISSING ON DISK]'}`));
 
     return {
         type: chosenType,
         path: chosenPath,
-        fileName
+        fileName,
+        exists
     };
 }
 
-module.exports = { selectResumeForJob, RESUMES };
+/**
+ * Validates that a resume file physically exists and is readable.
+ * @param {Object} selectedResume 
+ * @returns {{ valid: boolean, exists: boolean, path: string, fileName: string, type: string, reason: string|null }}
+ */
+function verifyResumeFile(selectedResume) {
+    if (!selectedResume || !selectedResume.path) {
+        return { valid: false, exists: false, path: '', fileName: '', type: 'MAIN', reason: 'NO_RESUME_SELECTED' };
+    }
+    const exists = fs.existsSync(selectedResume.path);
+    return {
+        valid: exists,
+        exists,
+        path: selectedResume.path,
+        fileName: selectedResume.fileName || path.basename(selectedResume.path),
+        type: selectedResume.type || 'MAIN',
+        reason: exists ? null : `Resume file does not exist at: ${selectedResume.path}`
+    };
+}
+
+module.exports = { selectResumeForJob, verifyResumeFile, RESUMES };

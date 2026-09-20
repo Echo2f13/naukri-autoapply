@@ -6,6 +6,9 @@ const settings = require('../config/settings');
  * @param {number} max 
  */
 async function randomDelay(min = settings.delays.min, max = settings.delays.max) {
+    if (process.env.AUTOMATED_TEST === 'true' || process.env.NODE_ENV === 'test') {
+        return Promise.resolve();
+    }
     const delay = Math.floor(Math.random() * (max - min + 1) + min);
     return new Promise(resolve => setTimeout(resolve, delay));
 }

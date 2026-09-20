@@ -5,6 +5,7 @@ const profile = require('../config/profile');
 const path = require('path');
 const fs = require('fs');
 const chalk = require('chalk');
+const { confirmAndExecuteSubmission } = require('../application/safetyBoundary');
 
 /**
  * Helper to find authentication input fields in Workday.
@@ -55,7 +56,7 @@ async function findAuthInput(page, labelRegex, typeSelector, automationId) {
  * Specialized handler for Workday (external) applications.
  */
 async function handleWorkdayApplication(page, jobUrl, jobOrResume = null, options = {}) {
-    const dryRun = options.dryRun || false;
+    const dryRun = options.dryRun !== undefined ? !!options.dryRun : true;
     console.log(chalk.magenta.bold(`\n--- ENTERING WORKDAY AUTOMATION ---`));
 
     const USER_EMAIL = process.env.WORKDAY_USERNAME || 'YOUR_WORKDAY_USERNAME'; // Replace with your actual Workday username or use environment variables for security
@@ -76,10 +77,18 @@ async function handleWorkdayApplication(page, jobUrl, jobOrResume = null, option
         : null;
 
     if (!RESUME_PATH) {
-        console.log(chalk.yellow('  ⚠️ Workday warning: No valid resume PDF found on disk.'));
+        console.log(chalk.red.bold(`  ❌ WORKDAY BLOCKED: Required resume file not found on disk: "${selectedResume?.path || 'unknown'}".`));
+        return {
+            status: 'BLOCKED',
+            reason: 'MISSING_REQUIRED_DATA',
+            message: `Required resume file not found on disk at: ${selectedResume?.path || 'unknown'}`,
+            resumeUsed: selectedResume?.fileName || 'MISSING'
+        };
     } else {
         console.log(chalk.gray(`  [Workday] Using verified resume: "${path.basename(RESUME_PATH)}"`));
     }
+
+    const jobContext = (jobOrResume && (jobOrResume.title || jobOrResume.company)) ? jobOrResume : { title: 'Workday Role', company: 'Workday Employer', applicationUrl: jobUrl };
 
     try {
         // Check if the page is missing or job doesn't exist
@@ -392,13 +401,38 @@ async function handleWorkdayApplication(page, jobUrl, jobOrResume = null, option
                 const btnText = (await nextBtn.innerText()).trim();
                 const isFinalSubmit = /submit/i.test(btnText) || sectionHeader.toLowerCase().includes('review');
 
-                if (dryRun && isFinalSubmit) {
-                    console.log(chalk.bold.yellow(`  🛡️  [SAFETY BARRIER] Workday final "${btnText}" button reached in section "${sectionHeader}". Stopped in Dry-Run.`));
-                    return {
-                        status: 'DRY_RUN_READY_TO_SUBMIT',
-                        message: `[DRY-RUN] Workday form completed up to final "${btnText}" step without submitting`,
-                        resumeUsed: RESUME_PATH ? path.basename(RESUME_PATH) : undefined
-                    };
+                if (isFinalSubmit) {
+                    const submissionGate = await confirmAndExecuteSubmission({
+                        dryRun,
+                        job: jobContext,
+                        resumeUsed: RESUME_PATH ? path.basename(RESUME_PATH) : undefined,
+                        destination: 'Workday ATS',
+                        actionName: `Workday Final "${btnText}" Button`,
+                        execute: async () => {
+                            console.log(chalk.yellow(`  Clicking "${btnText}"...`));
+                            await nextBtn.click();
+                            await randomDelay(6000, 10000);
+                            const verified = await isSuccessPage(page);
+                            if (verified) {
+                                return {
+                                    status: 'SUCCESS',
+                                    verified: true,
+                                    message: 'Workday submitted',
+                                    resumeUsed: RESUME_PATH ? path.basename(RESUME_PATH) : undefined
+                                };
+                            }
+                            return {
+                                status: 'FAILED',
+                                reason: 'SUBMISSION_NOT_VERIFIED',
+                                verified: false,
+                                message: 'Workday submission could not be verified on confirmation page',
+                                resumeUsed: RESUME_PATH ? path.basename(RESUME_PATH) : undefined
+                            };
+                        },
+                        promptFn: options.promptFn,
+                        isInteractive: options.isInteractive
+                    });
+                    return submissionGate;
                 }
 
                 console.log(chalk.yellow(`  Clicking "${btnText}"...`));
@@ -407,7 +441,7 @@ async function handleWorkdayApplication(page, jobUrl, jobOrResume = null, option
             } else {
                 if (await isSuccessPage(page)) {
                     console.log(chalk.green.bold('  ✔ WORKDAY APPLICATION SUCCESS!'));
-                    return { status: 'SUCCESS', message: 'Workday submitted' };
+                    return { status: 'SUCCESS', verified: true, message: 'Workday submitted' };
                 }
                 
                 // Retry check in case of slow page renders
@@ -416,13 +450,38 @@ async function handleWorkdayApplication(page, jobUrl, jobOrResume = null, option
                     const btnText = (await nextBtn.innerText()).trim();
                     const isFinalSubmit = /submit/i.test(btnText) || sectionHeader.toLowerCase().includes('review');
 
-                    if (dryRun && isFinalSubmit) {
-                        console.log(chalk.bold.yellow(`  🛡️  [SAFETY BARRIER] Workday final "${btnText}" button reached in section "${sectionHeader}". Stopped in Dry-Run.`));
-                        return {
-                            status: 'DRY_RUN_READY_TO_SUBMIT',
-                            message: `[DRY-RUN] Workday form completed up to final "${btnText}" step without submitting`,
-                            resumeUsed: RESUME_PATH ? path.basename(RESUME_PATH) : undefined
-                        };
+                    if (isFinalSubmit) {
+                        const submissionGate = await confirmAndExecuteSubmission({
+                            dryRun,
+                            job: jobContext,
+                            resumeUsed: RESUME_PATH ? path.basename(RESUME_PATH) : undefined,
+                            destination: 'Workday ATS',
+                            actionName: `Workday Final "${btnText}" Button`,
+                            execute: async () => {
+                                console.log(chalk.yellow(`  Clicking "${btnText}"...`));
+                                await nextBtn.click();
+                                await randomDelay(6000, 10000);
+                                const verified = await isSuccessPage(page);
+                                if (verified) {
+                                    return {
+                                        status: 'SUCCESS',
+                                        verified: true,
+                                        message: 'Workday submitted',
+                                        resumeUsed: RESUME_PATH ? path.basename(RESUME_PATH) : undefined
+                                    };
+                                }
+                                return {
+                                    status: 'FAILED',
+                                    reason: 'SUBMISSION_NOT_VERIFIED',
+                                    verified: false,
+                                    message: 'Workday submission could not be verified on confirmation page',
+                                    resumeUsed: RESUME_PATH ? path.basename(RESUME_PATH) : undefined
+                                };
+                            },
+                            promptFn: options.promptFn,
+                            isInteractive: options.isInteractive
+                        });
+                        return submissionGate;
                     }
 
                     console.log(chalk.yellow(`  Clicking "${btnText}"...`));
@@ -431,15 +490,30 @@ async function handleWorkdayApplication(page, jobUrl, jobOrResume = null, option
                     continue;
                 }
                 
+                if (await isSuccessPage(page)) {
+                    return { status: 'SUCCESS', verified: true, message: 'Workday submitted' };
+                }
+                
                 console.log(chalk.red('    [Error] Form flow interrupted: Next button not found, and not on success page.'));
-                return { status: 'FAILED', message: 'Form flow interrupted prematurely.' };
+                return { status: 'FAILED', reason: 'SUBMISSION_NOT_VERIFIED', message: 'Form flow interrupted prematurely.' };
             }
         }
 
         if (dryRun) {
-            return { status: 'DRY_RUN_READY_TO_SUBMIT', message: 'Workday automation reached review/submit boundary in Dry-Run.', resumeUsed: RESUME_PATH ? path.basename(RESUME_PATH) : undefined };
+            return await confirmAndExecuteSubmission({
+                dryRun: true,
+                job: jobContext,
+                resumeUsed: RESUME_PATH ? path.basename(RESUME_PATH) : undefined,
+                destination: 'Workday ATS',
+                actionName: 'Workday Review/Submit Boundary',
+                execute: async () => ({ status: 'SUCCESS' })
+            });
         }
-        return { status: 'SUCCESS', message: 'Workday automation reached end of detected forms.' };
+        
+        if (await isSuccessPage(page)) {
+            return { status: 'SUCCESS', verified: true, message: 'Workday submitted successfully' };
+        }
+        return { status: 'FAILED', reason: 'SUBMISSION_NOT_VERIFIED', verified: false, message: 'Workday automation reached end of detected forms without verified submission.' };
 
     } catch (err) {
         console.error(chalk.red(`  ❌ Workday Error: ${err.message}`));

@@ -147,19 +147,26 @@ async function recordApplicationResult(job, result) {
             });
         }
 
+        // Safety invariant: NEVER record SUCCESS if submission was unverified
+        let effectiveStatus = result.status;
+        if (effectiveStatus === 'SUCCESS' && result.verified !== true) {
+            console.warn(chalk.red.bold('  ⚠️ [Repository Safety Guard] Blocked unverified SUCCESS. Reclassifying as SUBMISSION_NOT_VERIFIED.'));
+            effectiveStatus = 'SUBMISSION_NOT_VERIFIED';
+        }
+
         if (jobRecord) {
             // Map status
-            const appStatus = result.status === 'SUCCESS' ? 'SUCCESS' : (result.status === 'SKIPPED' ? 'SKIPPED' : 'FAILED');
+            const appStatus = effectiveStatus === 'SUCCESS' ? 'SUCCESS' : (effectiveStatus === 'SKIPPED' ? 'SKIPPED' : 'FAILED');
 
             // 2. Create Application record
             const application = await prisma.application.create({
                 data: {
                     jobId: jobRecord.id,
                     status: appStatus,
-                    appliedAt: result.status === 'SUCCESS' ? new Date() : null,
+                    appliedAt: effectiveStatus === 'SUCCESS' ? new Date() : null,
                     resumeUsed: result.resumeUsed || null,
                     matchScore: result.matchScore || null,
-                    failureReason: result.status !== 'SUCCESS' ? (result.message || null) : null,
+                    failureReason: effectiveStatus !== 'SUCCESS' ? (result.message || null) : null,
                     qaSnapshot: result.qa ? result.qa : null
                 }
             });
@@ -169,9 +176,9 @@ async function recordApplicationResult(job, result) {
                 data: {
                     applicationId: application.id,
                     attemptNumber: 1,
-                    status: result.status,
+                    status: effectiveStatus,
                     message: result.message || 'Attempt completed',
-                    errorDetails: result.status === 'FAILED' ? result.message : null,
+                    errorDetails: effectiveStatus !== 'SUCCESS' ? result.message : null,
                     attemptedAt: new Date()
                 }
             });
@@ -182,9 +189,9 @@ async function recordApplicationResult(job, result) {
             await prisma.appliedJob.upsert({
                 where: { jobUrl },
                 update: {
-                    status: result.status,
-                    appliedAt: new Date(),
-                    errorMessage: result.status !== 'SUCCESS' ? result.message : null,
+                    status: effectiveStatus,
+                    appliedAt: effectiveStatus === 'SUCCESS' ? new Date() : null,
+                    errorMessage: effectiveStatus !== 'SUCCESS' ? result.message : null,
                     matchScore: result.matchScore || null,
                     externalUrl: result.externalUrl || null,
                     recruiterQuestions: result.qa ? result.qa.map(q => q.question) : [],
@@ -195,8 +202,8 @@ async function recordApplicationResult(job, result) {
                     role: job.title || job.role || 'Unknown',
                     location: Array.isArray(job.locations) ? job.locations.join(', ') : (job.location || 'India'),
                     jobUrl,
-                    status: result.status,
-                    errorMessage: result.status !== 'SUCCESS' ? result.message : null,
+                    status: effectiveStatus,
+                    errorMessage: effectiveStatus !== 'SUCCESS' ? result.message : null,
                     matchScore: result.matchScore || null,
                     externalUrl: result.externalUrl || null,
                     recruiterQuestions: result.qa ? result.qa.map(q => q.question) : [],
@@ -205,7 +212,7 @@ async function recordApplicationResult(job, result) {
             });
         }
 
-        console.log(chalk.green(`  [Repository] Application outcome recorded: ${result.status} for "${job.title || job.role}"`));
+        console.log(chalk.green(`  [Repository] Application outcome recorded: ${effectiveStatus} for "${job.title || job.role}"`));
     } catch (err) {
         console.error(chalk.red(`  ❌ [Repository] Failed to record application result: ${err.message}`));
     }

@@ -11,7 +11,7 @@ async function loadResume(customPath = null) {
     try {
         const targetPath = customPath || settings.resumePath;
         if (!fs.existsSync(targetPath)) {
-            console.log(chalk.yellow(`[Prompts] ⚠️  Resume not found at ${targetPath}. Proceeding without it.`));
+            console.log(chalk.yellow(`[Prompts] ⚠️  Resume not found at ${targetPath}.`));
             return;
         }
         const { PDFParse } = require('pdf-parse');

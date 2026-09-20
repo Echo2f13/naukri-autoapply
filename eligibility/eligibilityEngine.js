@@ -10,7 +10,12 @@ const chalk = require('chalk');
 
 class EligibilityEngine {
     constructor(options = {}) {
-        this.maxCandidateExp = options.maxCandidateExp ?? 1;
+        let profile = {};
+        try {
+            const { loadProfile } = require('../config/profileLoader');
+            profile = loadProfile({ throwOnError: false }) || {};
+        } catch (_) {}
+        this.maxCandidateExp = options.maxCandidateExp ?? (profile.maxExperience || profile.experience || 2);
         this.allowedLocations = options.allowedLocations ?? null;
         this.excludedCompanies = options.excludedCompanies ?? null;
     }

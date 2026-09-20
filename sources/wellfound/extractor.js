@@ -38,9 +38,24 @@ async function extractWellfoundCardElements(page) {
             const lines = (titleEl?.innerText || '').split('\n').map(s => s.trim()).filter(Boolean);
             const title = lines[0] || '';
 
+            let comp = compEl?.innerText?.trim() || '';
+            if (!comp) {
+                // Traverse ancestor containers for company header/card
+                let curr = card.parentElement;
+                for (let i = 0; i < 6; i++) {
+                    if (!curr) break;
+                    const ancestorComp = curr.querySelector(sel.companyName) || curr.querySelector('a[href*="/company/"]') || curr.querySelector('h2');
+                    if (ancestorComp && ancestorComp.innerText.trim()) {
+                        comp = ancestorComp.innerText.trim().split('\n')[0];
+                        break;
+                    }
+                    curr = curr.parentElement;
+                }
+            }
+
             results.push({
                 title,
-                company: compEl?.innerText?.trim() || '',
+                company: comp || null,
                 location: locEl?.innerText?.trim() || lines[1] || '',
                 salaryOrComp: salaryEl?.innerText?.trim() || '',
                 tags,
@@ -67,7 +82,7 @@ async function extractWellfoundCardElements(page) {
             let curr = a.parentElement;
             for (let i = 0; i < 6; i++) {
                 if (!curr) break;
-                const compEl = curr.querySelector('a[href*="/company/"]');
+                const compEl = curr.querySelector('a[href*="/company/"]') || curr.querySelector(sel.companyName) || curr.querySelector('h2');
                 if (compEl && compEl.innerText.trim()) {
                     company = compEl.innerText.trim().split('\n')[0];
                     break;
@@ -91,7 +106,7 @@ async function extractWellfoundCardElements(page) {
 
             results.push({
                 title,
-                company: company || 'Startup Company',
+                company: company || null,
                 location,
                 salaryOrComp: salary,
                 tags: [],
@@ -158,7 +173,10 @@ async function extractWellfoundJobDetails(page) {
  */
 function buildNormalizedWellfoundJob(cardData, detailsData = {}) {
     const title = detailsData.title || cardData.title || 'Unknown Startup Role';
-    const company = detailsData.company || cardData.company || 'Unknown Startup';
+    const rawCompany = detailsData.company || cardData.company;
+    const company = (rawCompany && rawCompany.trim().length > 0 && !/^(unknown startup|startup company)$/i.test(rawCompany.trim()))
+        ? rawCompany.trim()
+        : 'Unknown Company';
     const location = detailsData.location || cardData.location || 'Remote';
     const jobUrl = cardData.jobUrl || (cardData.sourceJobId ? `https://wellfound.com/jobs/${cardData.sourceJobId}` : '');
 
@@ -171,7 +189,9 @@ function buildNormalizedWellfoundJob(cardData, detailsData = {}) {
         : /remote|wfh/i.test(location);
 
     const desc = detailsData.description || '';
-    const expRange = parseExperienceRange(cardData.experience || desc.slice(0, 300) || '');
+    // Look for experience mentions in card title, tags, or description
+    const rawExp = cardData.experience || cardData.title || tags.join(' ') || desc.slice(0, 500) || '';
+    const expRange = parseExperienceRange(rawExp);
 
     return createNormalizedJob({
         source: 'WELLFOUND',

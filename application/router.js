@@ -1,5 +1,6 @@
 'use strict';
 
+const fs = require('fs');
 const chalk = require('chalk');
 const { handleNaukriNativeApplication } = require('./handlers/naukriNative');
 const { handleWorkdayApplication } = require('./handlers/workday');
@@ -7,7 +8,7 @@ const { handleZohoRecruitApplication } = require('./handlers/zoho');
 const { handleGenericATSApplication } = require('./handlers/genericATS');
 const { handleLinkedInEasyApply } = require('./handlers/linkedinEasyApply');
 const { handleWellfoundNative } = require('./handlers/wellfoundNative');
-const { selectResumeForJob } = require('../automation/resumeSelector');
+const { selectResumeForJob, verifyResumeFile } = require('../automation/resumeSelector');
 const { randomDelay } = require('../automation/utils');
 
 /**
@@ -21,6 +22,11 @@ function resolveApplicationTarget(job = {}, page) {
     const jobUrl = typeof job === 'string' ? job : (job?.applicationUrl || job?.jobUrl || job?.sourceUrl || '');
     const checkUrl = (page ? page.url() : '') || jobUrl || '';
     const lowerUrl = checkUrl.toLowerCase();
+
+    // 0. Email Application
+    if (job?.applicationType === 'EMAIL_APPLICATION' || lowerUrl.startsWith('mailto:')) {
+        return 'EMAIL_APPLICATION';
+    }
 
     // 1. Workday
     if (lowerUrl.includes('workdayjobs.com') || lowerUrl.includes('myworkdayjobs.com') || /\.wd\d+\.myworkdayjobs\.com/.test(lowerUrl)) {
@@ -76,13 +82,32 @@ function resolveApplicationTarget(job = {}, page) {
  * @param {Object} [context]
  * @returns {Promise<{ status: 'SUCCESS'|'FAILED'|'SKIPPED', message: string, resumeUsed?: string, externalUrl?: string }>}
  */
-async function routeAndApply(page, job, context = {}) {
+async function routeAndApply(page, job, options = {}) {
     console.log(chalk.bold.magenta(`\n=== [Application Router] Routing Application ===`));
     console.log(chalk.cyan(`  Job: "${job.title}" at "${job.company}" (Source: ${job.source})`));
 
     const selectedResume = selectResumeForJob(job);
     let target = resolveApplicationTarget(job, page);
     console.log(chalk.cyan(`  Initial Target Resolution: ${target}`));
+
+    // Safety check: If destination requires physical resume attachment, ensure it exists on disk
+    const resumeVerification = verifyResumeFile(selectedResume);
+    const requiresResume = target === 'WORKDAY' || target === 'ZOHO' || target === 'GENERIC_ATS' || target === 'GREENHOUSE' || target === 'LEVER' || target === 'ASHBY';
+    if (requiresResume && !resumeVerification.exists) {
+        console.log(chalk.red.bold(`  ❌ [Application Router] Application BLOCKED: Required resume not found on disk: "${selectedResume?.path || 'unknown'}".`));
+        return {
+            status: 'BLOCKED',
+            reason: 'MISSING_REQUIRED_DATA',
+            message: `Required resume file not found on disk at: ${selectedResume?.path || 'unknown'}`,
+            resumeUsed: selectedResume?.fileName || 'MISSING'
+        };
+    }
+
+    const handlerOptions = {
+        dryRun: options.dryRun !== undefined ? !!options.dryRun : (options.context && options.context.dryRun !== undefined ? !!options.context.dryRun : true),
+        promptFn: options.promptFn,
+        isInteractive: options.isInteractive
+    };
 
     // Special case: If Naukri job with potential external redirect
     if (target === 'NAUKRI_NATIVE') {
@@ -124,11 +149,11 @@ async function routeAndApply(page, job, context = {}) {
             let result;
             try {
                 if (target === 'WORKDAY') {
-                    result = await handleWorkdayApplication(externalPage, actualExternalUrl, job, { dryRun: context.dryRun });
+                    result = await handleWorkdayApplication(externalPage, actualExternalUrl, job, handlerOptions);
                 } else if (target === 'ZOHO') {
-                    result = await handleZohoRecruitApplication(externalPage, job, selectedResume, { dryRun: context.dryRun });
+                    result = await handleZohoRecruitApplication(externalPage, job, selectedResume, handlerOptions);
                 } else {
-                    result = await handleGenericATSApplication(externalPage, job, actualExternalUrl, selectedResume, { dryRun: context.dryRun });
+                    result = await handleGenericATSApplication(externalPage, job, actualExternalUrl, selectedResume, handlerOptions);
                 }
             } finally {
                 if (newPage) {
@@ -139,39 +164,56 @@ async function routeAndApply(page, job, context = {}) {
         }
 
         // Native Naukri Flow
-        return await handleNaukriNativeApplication(page, job, { dryRun: context.dryRun });
+        return await handleNaukriNativeApplication(page, job, handlerOptions);
+    }
+
+    // Direct navigation for external destinations if page is not yet on destination
+    const destUrl = job.applicationUrl || job.sourceUrl;
+    if (destUrl && destUrl.startsWith('http') && !page.url().includes(destUrl) && target !== 'LINKEDIN_EASY_APPLY' && target !== 'WELLFOUND_NATIVE') {
+        console.log(chalk.gray(`  [Router] Navigating to destination: ${destUrl}`));
+        await page.goto(destUrl, { waitUntil: 'domcontentloaded', timeout: 45000 }).catch(err => {
+            console.warn(chalk.yellow(`  ⚠️ [Router] Navigation warning: ${err.message}`));
+        });
+        await randomDelay(2000, 3000);
     }
 
     // Direct routing for non-Naukri or known direct URLs
     switch (target) {
+        case 'EMAIL_APPLICATION':
+            console.log(chalk.yellow(`  ℹ️ [Application Router] Job "${job.title}" requires direct email application (${job.applicationUrl}). Web automation not applicable.`));
+            return {
+                status: 'SKIPPED',
+                reason: 'EMAIL_APPLICATION_REQUIRED',
+                message: `Requires direct email application to: ${job.applicationUrl.replace('mailto:', '')}`,
+                resumeUsed: selectedResume?.fileName,
+                externalUrl: job.applicationUrl
+            };
         case 'WORKDAY':
-            return await handleWorkdayApplication(page, job.applicationUrl, job, { dryRun: context.dryRun });
+            return await handleWorkdayApplication(page, job.applicationUrl, job, handlerOptions);
         case 'ZOHO':
-            return await handleZohoRecruitApplication(page, job, selectedResume, { dryRun: context.dryRun });
+            return await handleZohoRecruitApplication(page, job, selectedResume, handlerOptions);
         case 'LINKEDIN_EASY_APPLY': {
-            const destUrl = job.applicationUrl || job.sourceUrl;
             if (destUrl && !page.url().includes(destUrl) && (!job.sourceJobId || !page.url().includes(job.sourceJobId))) {
                 console.log(chalk.gray(`  [Router] Navigating to LinkedIn job: ${destUrl}`));
                 await page.goto(destUrl, { waitUntil: 'domcontentloaded', timeout: 45000 });
                 await randomDelay(2000, 3000);
             }
-            return await handleLinkedInEasyApply(page, job, { dryRun: context.dryRun });
+            return await handleLinkedInEasyApply(page, job, handlerOptions);
         }
         case 'WELLFOUND_NATIVE': {
-            const destUrl = job.applicationUrl || job.sourceUrl;
             if (destUrl && !page.url().includes(destUrl)) {
                 console.log(chalk.gray(`  [Router] Navigating to Wellfound job: ${destUrl}`));
                 await page.goto(destUrl, { waitUntil: 'domcontentloaded', timeout: 45000 });
                 await randomDelay(2000, 3000);
             }
-            return await handleWellfoundNative(page, job, { dryRun: context.dryRun });
+            return await handleWellfoundNative(page, job, handlerOptions);
         }
         case 'GREENHOUSE':
         case 'LEVER':
         case 'ASHBY':
         case 'GENERIC_ATS':
         default:
-            return await handleGenericATSApplication(page, job, job.applicationUrl, selectedResume, { dryRun: context.dryRun });
+            return await handleGenericATSApplication(page, job, job.applicationUrl, selectedResume, handlerOptions);
     }
 }
 

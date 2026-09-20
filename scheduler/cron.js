@@ -35,9 +35,15 @@ cron.schedule(cronExpression, async () => {
             ? (process.env.SCHEDULED_DRY_RUN === 'true' || process.env.SCHEDULED_DRY_RUN === '1')
             : (process.env.DRY_RUN !== undefined ? (process.env.DRY_RUN === 'true' || process.env.DRY_RUN === '1') : true);
 
+        console.log(chalk.gray(`  Mode     : ${isDryRun ? 'DRY-RUN (Safe Default)' : 'LIVE (Human Gate Enforced)'}`));
+        if (!isDryRun && (!process.stdin || !process.stdin.isTTY)) {
+            console.log(chalk.yellow('  ⚠️ Notice: Scheduled execution in live mode has no interactive terminal.'));
+            console.log(chalk.yellow('            Unconfirmed submissions will automatically and safely abort.'));
+        }
+
         await runAutonomousAutoApply({
             sources: enabledSources,
-            maxApply: parseInt(process.env.SCHEDULED_MAX_APPLY || '15', 10),
+            maxApply: parseInt(process.env.SCHEDULED_MAX_APPLY || (isDryRun ? '15' : '1'), 10),
             minScore: parseInt(process.env.SCHEDULED_MIN_SCORE || '50', 10),
             dryRun: isDryRun
         });

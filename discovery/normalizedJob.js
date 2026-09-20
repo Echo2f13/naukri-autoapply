@@ -75,8 +75,11 @@ function parseExperienceRange(expStr = '') {
  * @returns {NormalizedJob}
  */
 function createNormalizedJob(data = {}) {
-    const title = (data.title || data.role || 'Unknown Title').trim();
-    const company = (data.company || 'Unknown Company').trim();
+    const rawTitle = data.title !== undefined ? data.title : data.role;
+    const title = rawTitle !== null && rawTitle !== undefined ? String(rawTitle).trim() : null;
+    const rawCompany = data.company;
+    const company = rawCompany !== null && rawCompany !== undefined ? String(rawCompany).trim() : null;
+    const needsReview = !!data.needsReview || !title || !company;
     
     // Normalize locations array
     let locations = [];
@@ -93,8 +96,8 @@ function createNormalizedJob(data = {}) {
         locText.includes('remote') ||
         locText.includes('wfh') ||
         locText.includes('work from home') ||
-        title.toLowerCase().includes('remote') ||
-        title.toLowerCase().includes('wfh')
+        (title ? title.toLowerCase().includes('remote') : false) ||
+        (title ? title.toLowerCase().includes('wfh') : false)
     );
 
     // Experience calculation
@@ -145,6 +148,7 @@ function createNormalizedJob(data = {}) {
         postedAge: data.postedAge || '',
         postedAt: data.postedAt || null,
         discoveredAt: data.discoveredAt || new Date(),
+        needsReview,
         rawPayload: data.rawPayload || { ...data },
 
         // Backward compatibility getters for legacy modules
